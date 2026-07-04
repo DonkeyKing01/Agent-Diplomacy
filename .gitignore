@@ -1,0 +1,43 @@
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Node
+node_modules/
+dist/
+dist-check/
+npm-debug.log*
+
+# Local config / secrets
+.env
+.env.*
+!.env.example
+
+# Runtime data
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+logs/
+*.log
+uploads/
+
+# Project-local caches / generated platform files
+.atoms/
+.mgx/
+.npm-cache/
+.pnpm-home/
+.tmp/
+.uv-cache/
+_tmp_*

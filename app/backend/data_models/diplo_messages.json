@@ -1,0 +1,47 @@
+{
+    "title": "diplo_messages",
+    "type": "object",
+    "description": "Diplomatic secret letters between nations generated each phase.",
+    "properties": {
+        "id": {
+            "type": "integer",
+            "description": "autoincrement primary key"
+        },
+        "session_key": {
+            "type": "string",
+            "description": "owning session key"
+        },
+        "year": {
+            "type": "integer",
+            "description": "in-game year of the message"
+        },
+        "season": {
+            "type": "string",
+            "description": "season/phase of the message"
+        },
+        "from_nation": {
+            "type": "string",
+            "description": "sender nation id"
+        },
+        "to_nation": {
+            "type": "string",
+            "description": "recipient nation id, or 'public' for open"
+        },
+        "intent": {
+            "type": "string",
+            "description": "intent tag: alliance/threat/deceive/propose/betray/info"
+        },
+        "content": {
+            "type": "string",
+            "description": "Chinese message body"
+        }
+    },
+    "required": [
+        "session_key",
+        "year",
+        "season",
+        "from_nation",
+        "to_nation",
+        "content"
+    ]
+}

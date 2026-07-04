@@ -1,0 +1,130 @@
+@import url('https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;600;700;900&family=Noto+Sans+SC:wght@400;500;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* War-room dark command theme is the default. Neutrals tinted toward slate-blue (hue 215). */
+    --background: 216 40% 7%;
+    --foreground: 210 30% 92%;
+
+    --card: 215 34% 11%;
+    --card-foreground: 210 30% 92%;
+
+    --popover: 215 38% 9%;
+    --popover-foreground: 210 30% 92%;
+
+    /* Amber "war map" accent */
+    --primary: 38 82% 55%;
+    --primary-foreground: 216 45% 8%;
+
+    --secondary: 215 28% 17%;
+    --secondary-foreground: 210 30% 90%;
+
+    --muted: 215 26% 16%;
+    --muted-foreground: 213 18% 60%;
+
+    --accent: 200 70% 48%;
+    --accent-foreground: 216 45% 8%;
+
+    --destructive: 0 68% 48%;
+    --destructive-foreground: 210 30% 96%;
+
+    --border: 214 26% 20%;
+    --input: 214 26% 20%;
+    --ring: 38 82% 55%;
+
+    --radius: 0.5rem;
+
+    --sidebar-background: 216 42% 6%;
+    --sidebar-foreground: 210 24% 82%;
+    --sidebar-primary: 38 82% 55%;
+    --sidebar-primary-foreground: 216 45% 8%;
+    --sidebar-accent: 215 30% 14%;
+    --sidebar-accent-foreground: 210 30% 92%;
+    --sidebar-border: 214 26% 18%;
+    --sidebar-ring: 38 82% 55%;
+  }
+
+  /* Keep .dark identical — this app is always the dark war-room theme. */
+  .dark {
+    --background: 216 40% 7%;
+    --foreground: 210 30% 92%;
+    --card: 215 34% 11%;
+    --card-foreground: 210 30% 92%;
+    --popover: 215 38% 9%;
+    --popover-foreground: 210 30% 92%;
+    --primary: 38 82% 55%;
+    --primary-foreground: 216 45% 8%;
+    --secondary: 215 28% 17%;
+    --secondary-foreground: 210 30% 90%;
+    --muted: 215 26% 16%;
+    --muted-foreground: 213 18% 60%;
+    --accent: 200 70% 48%;
+    --accent-foreground: 216 45% 8%;
+    --destructive: 0 68% 48%;
+    --destructive-foreground: 210 30% 96%;
+    --border: 214 26% 20%;
+    --input: 214 26% 20%;
+    --ring: 38 82% 55%;
+    --sidebar-background: 216 42% 6%;
+    --sidebar-foreground: 210 24% 82%;
+    --sidebar-primary: 38 82% 55%;
+    --sidebar-primary-foreground: 216 45% 8%;
+    --sidebar-accent: 215 30% 14%;
+    --sidebar-accent-foreground: 210 30% 92%;
+    --sidebar-border: 214 26% 18%;
+    --sidebar-ring: 38 82% 55%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html {
+    color-scheme: dark;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-family: 'Noto Sans SC', system-ui, sans-serif;
+    font-feature-settings: 'tnum' on;
+  }
+
+  h1, h2, h3, .font-display {
+    font-family: 'Noto Serif SC', 'Noto Sans SC', serif;
+  }
+
+  h1 {
+    @apply text-3xl font-bold leading-tight tracking-tight;
+  }
+  h2 {
+    @apply text-2xl font-semibold leading-snug;
+  }
+  h3 {
+    @apply text-xl font-semibold;
+  }
+}
+
+@layer utilities {
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+  /* Faint topographic grid for the command-room background */
+  .cmd-grid {
+    background-image:
+      linear-gradient(hsl(214 26% 20% / 0.35) 1px, transparent 1px),
+      linear-gradient(90deg, hsl(214 26% 20% / 0.35) 1px, transparent 1px);
+    background-size: 44px 44px;
+  }
+  .text-glow {
+    text-shadow: 0 0 12px hsl(38 82% 55% / 0.45);
+  }
+  .scrollbar-thin::-webkit-scrollbar { width: 6px; height: 6px; }
+  .scrollbar-thin::-webkit-scrollbar-thumb { background: hsl(214 26% 28%); border-radius: 3px; }
+  .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+}

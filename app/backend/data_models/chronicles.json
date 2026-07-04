@@ -1,0 +1,32 @@
+{
+    "title": "chronicles",
+    "type": "object",
+    "description": "Annual chronicle history entries summarizing each year.",
+    "properties": {
+        "id": {
+            "type": "integer",
+            "description": "autoincrement primary key"
+        },
+        "session_key": {
+            "type": "string",
+            "description": "owning session key"
+        },
+        "year": {
+            "type": "integer",
+            "description": "in-game year summarized"
+        },
+        "summary": {
+            "type": "string",
+            "description": "Chinese annual summary"
+        },
+        "sc_snapshot_json": {
+            "type": "string",
+            "description": "JSON snapshot: nation id -> SC count at year end"
+        }
+    },
+    "required": [
+        "session_key",
+        "year",
+        "summary"
+    ]
+}

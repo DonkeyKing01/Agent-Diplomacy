@@ -1,0 +1,41 @@
+{
+    "title": "war_reports",
+    "type": "object",
+    "description": "Public Chinese war/battle reports for each resolved phase.",
+    "properties": {
+        "id": {
+            "type": "integer",
+            "description": "autoincrement primary key"
+        },
+        "session_key": {
+            "type": "string",
+            "description": "owning session key"
+        },
+        "year": {
+            "type": "integer",
+            "description": "in-game year"
+        },
+        "season": {
+            "type": "string",
+            "description": "season/phase"
+        },
+        "phase_index": {
+            "type": "integer",
+            "description": "console progress counter at generation"
+        },
+        "headline": {
+            "type": "string",
+            "description": "short Chinese headline"
+        },
+        "body": {
+            "type": "string",
+            "description": "Chinese report body"
+        }
+    },
+    "required": [
+        "session_key",
+        "year",
+        "season",
+        "body"
+    ]
+}

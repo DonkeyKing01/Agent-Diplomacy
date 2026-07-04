@@ -1,0 +1,56 @@
+{
+    "title": "nation_agents",
+    "type": "object",
+    "description": "Per-nation agent profile shaping LLM behavior. Public, edited by the game designer.",
+    "properties": {
+        "id": {
+            "type": "integer",
+            "description": "autoincrement primary key"
+        },
+        "session_key": {
+            "type": "string",
+            "description": "owning session key"
+        },
+        "nation_id": {
+            "type": "string",
+            "description": "nation identifier, e.g. 'aquila'"
+        },
+        "nation_name": {
+            "type": "string",
+            "description": "Chinese display name"
+        },
+        "system_prompt": {
+            "type": "string",
+            "description": "System Prompt shaping the nation agent persona"
+        },
+        "skills_md": {
+            "type": "string",
+            "description": "Skills.md capabilities/strategy in markdown"
+        },
+        "memory": {
+            "type": "string",
+            "description": "long-term Memory notes"
+        },
+        "annual_advice": {
+            "type": "string",
+            "description": "designer's yearly advice to the nation"
+        },
+        "aggression": {
+            "type": "integer",
+            "description": "personality: aggression 0-100"
+        },
+        "loyalty": {
+            "type": "integer",
+            "description": "personality: loyalty/trustworthiness 0-100"
+        },
+        "cunning": {
+            "type": "integer",
+            "description": "personality: cunning/deception 0-100"
+        }
+    },
+    "required": [
+        "session_key",
+        "nation_id",
+        "nation_name"
+    ]
+}

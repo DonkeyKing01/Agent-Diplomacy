@@ -1,0 +1,62 @@
+{
+    "title": "game_sessions",
+    "type": "object",
+    "description": "A single live Agent Diplomacy game session. Holds the full board state as JSON so any device or host can read/resume.",
+    "properties": {
+        "id": {
+            "type": "integer",
+            "description": "autoincrement primary key"
+        },
+        "session_key": {
+            "type": "string",
+            "description": "stable key for the live show session, e.g. 'main'"
+        },
+        "year": {
+            "type": "integer",
+            "description": "current in-game year, e.g. 1"
+        },
+        "season": {
+            "type": "string",
+            "description": "current season/phase: spring/autumn/winter"
+        },
+        "phase_index": {
+            "type": "integer",
+            "description": "console progress counter, increments each advance"
+        },
+        "status": {
+            "type": "string",
+            "description": "game status: setup/running/finished"
+        },
+        "provinces_json": {
+            "type": "string",
+            "description": "JSON: province -> owning nation id"
+        },
+        "units_json": {
+            "type": "string",
+            "description": "JSON: list of units {nation, type, province}"
+        },
+        "sc_json": {
+            "type": "string",
+            "description": "JSON: nation id -> supply center count"
+        },
+        "nations_json": {
+            "type": "string",
+            "description": "JSON: list of nation meta {id,name,color}"
+        },
+        "last_orders_json": {
+            "type": "string",
+            "description": "JSON: last resolved phase orders per nation"
+        },
+        "engine": {
+            "type": "string",
+            "description": "'llm' when driven by real LLM, 'fallback' when deterministic"
+        }
+    },
+    "required": [
+        "session_key",
+        "year",
+        "season",
+        "phase_index",
+        "status"
+    ]
+}
