@@ -64,6 +64,12 @@ export interface BackendState {
   nations: { id: string; name: string; short: string; color: string }[];
   lastOrders: Record<string, unknown[]>;
   agents: Record<string, BackendAgent>;
+  trust?: Record<string, number>;
+  governance?: {
+    system_prompt_edits_used: number;
+    skills_edits_used: number;
+    annual_advice_updated_years: number[];
+  };
   messages?: BackendMessage[];
   reports?: BackendReport[];
   history?: BackendHistory[];

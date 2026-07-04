@@ -44,7 +44,8 @@ const FIELD_HINT: { key: keyof Nation; label: string; zh: string; rows: number }
 const AgentSettingsPanel: React.FC = () => {
   const { state, ready, settingsSource, focusNation, closeSettings, updateNation } = useGame();
   const navigate = useNavigate();
-  const running = phaseAt(state.phaseIndex).key !== 'review' && ready && state.status !== 'finished';
+  const inReview = phaseAt(state.phaseIndex).key === 'review' && ready && state.status !== 'finished';
+  const running = !inReview && ready && state.status !== 'finished';
 
   const [selectedId, setSelectedId] = useState<string>(focusNation || state.nations[0].id);
   const selected = state.nations.find((n) => n.id === selectedId) || state.nations[0];
@@ -62,17 +63,22 @@ const AgentSettingsPanel: React.FC = () => {
     if (settingsSource && RETURN_PATH[settingsSource]) navigate(RETURN_PATH[settingsSource]);
   };
 
-  const handleSave = () => {
-    updateNation(draft.id, {
-      systemPrompt: draft.systemPrompt,
-      skills: draft.skills,
-      memory: draft.memory,
-      yearlyAdvice: draft.yearlyAdvice,
-      traits: draft.traits,
-    });
-    toast.success(`已保存「${draft.name}」的智能体设置`, {
-      description: running ? '当前阶段正在运行，修改将在下一阶段生效。' : '设置已即时写入国家档案。',
-    });
+  const handleSave = async () => {
+    try {
+      await updateNation(draft.id, {
+        systemPrompt: draft.systemPrompt,
+        skills: draft.skills,
+        yearlyAdvice: draft.yearlyAdvice,
+        traits: draft.traits,
+      });
+      toast.success(`已保存「${draft.name}」的智能体设置`, {
+        description: inReview ? '治理修改已写入，并会参与下一年度决策。' : '设置已保存。',
+      });
+    } catch (error) {
+      toast.error('保存失败', {
+        description: (error as { message?: string })?.message || '请稍后重试',
+      });
+    }
   };
 
   const handleDiscard = () => {
@@ -97,7 +103,7 @@ const AgentSettingsPanel: React.FC = () => {
         </div>
         {running && (
           <Badge variant="outline" className="border-primary/50 text-primary">
-            当前阶段运行中，修改将在下一阶段生效
+            当前不是年度复盘阶段，设置仅可查看
           </Badge>
         )}
       </div>
@@ -146,6 +152,15 @@ const AgentSettingsPanel: React.FC = () => {
             {/* 2. Agent 核心设置 */}
             <section className="space-y-4 rounded-lg border border-border bg-card p-5">
               <h3 className="font-display text-lg font-semibold">Agent 核心设置</h3>
+              <div className="grid gap-2 rounded-md border border-border/70 bg-secondary/20 p-3 text-sm text-muted-foreground">
+                <div>System Prompt 剩余额度：{Math.max(0, 1 - state.governance.system_prompt_edits_used)} / 1</div>
+                <div>Skills.md 剩余额度：{Math.max(0, 3 - state.governance.skills_edits_used)} / 3</div>
+                <div>
+                  本年年度建议：
+                  {state.governance.annual_advice_updated_years.includes(state.year) ? '已使用' : '可修改 1 次'}
+                </div>
+                <div>Memory 为锁定历史层，只读展示，不可手动清空。</div>
+              </div>
               {FIELD_HINT.map((f) => (
                 <div key={f.key} className="space-y-1.5">
                   <Label className="flex items-baseline gap-2">
@@ -156,6 +171,7 @@ const AgentSettingsPanel: React.FC = () => {
                     rows={f.rows}
                     value={draft[f.key] as string}
                     onChange={(e) => setDraft({ ...draft, [f.key]: e.target.value })}
+                    readOnly={!inReview || f.key === 'memory'}
                     className="resize-none font-mono text-sm scrollbar-thin"
                   />
                 </div>
@@ -166,18 +182,18 @@ const AgentSettingsPanel: React.FC = () => {
             <section className="space-y-5 rounded-lg border border-border bg-card p-5">
               <h3 className="font-display text-lg font-semibold">国家性格参数</h3>
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <TextTrait label="国家气质" value={draft.traits.temperament} onChange={(v) => setDraft({ ...draft, traits: { ...draft.traits, temperament: v } })} />
-                <TextTrait label="风险偏好" value={draft.traits.risk} onChange={(v) => setDraft({ ...draft, traits: { ...draft.traits, risk: v } })} />
-                <TextTrait label="荣誉观" value={draft.traits.honor} onChange={(v) => setDraft({ ...draft, traits: { ...draft.traits, honor: v } })} />
-                <TextTrait label="外交风格" value={draft.traits.diplomacy} onChange={(v) => setDraft({ ...draft, traits: { ...draft.traits, diplomacy: v } })} />
+                <TextTrait label="国家气质" value={draft.traits.temperament} disabled={!inReview} onChange={(v) => setDraft({ ...draft, traits: { ...draft.traits, temperament: v } })} />
+                <TextTrait label="风险偏好" value={draft.traits.risk} disabled={!inReview} onChange={(v) => setDraft({ ...draft, traits: { ...draft.traits, risk: v } })} />
+                <TextTrait label="荣誉观" value={draft.traits.honor} disabled={!inReview} onChange={(v) => setDraft({ ...draft, traits: { ...draft.traits, honor: v } })} />
+                <TextTrait label="外交风格" value={draft.traits.diplomacy} disabled={!inReview} onChange={(v) => setDraft({ ...draft, traits: { ...draft.traits, diplomacy: v } })} />
               </div>
-              <SliderTrait label="记仇指数" value={draft.traits.vengeance} onChange={(v) => setDraft({ ...draft, traits: { ...draft.traits, vengeance: v } })} />
-              <SliderTrait label="扩张倾向" value={draft.traits.expansion} onChange={(v) => setDraft({ ...draft, traits: { ...draft.traits, expansion: v } })} />
+              <SliderTrait label="记仇指数" value={draft.traits.vengeance} disabled={!inReview} onChange={(v) => setDraft({ ...draft, traits: { ...draft.traits, vengeance: v } })} />
+              <SliderTrait label="扩张倾向" value={draft.traits.expansion} disabled={!inReview} onChange={(v) => setDraft({ ...draft, traits: { ...draft.traits, expansion: v } })} />
             </section>
 
             {/* 4. 操作按钮 */}
             <section className="flex flex-wrap gap-3">
-              <Button onClick={handleSave}>
+              <Button onClick={handleSave} disabled={!inReview}>
                 <Save className="mr-1.5 h-4 w-4" />
                 保存设置
               </Button>
@@ -217,20 +233,20 @@ const AgentSettingsPanel: React.FC = () => {
   );
 };
 
-const TextTrait: React.FC<{ label: string; value: string; onChange: (v: string) => void }> = ({ label, value, onChange }) => (
+const TextTrait: React.FC<{ label: string; value: string; onChange: (v: string) => void; disabled?: boolean }> = ({ label, value, onChange, disabled }) => (
   <div className="space-y-1.5">
     <Label>{label}</Label>
-    <Input value={value} onChange={(e) => onChange(e.target.value)} />
+    <Input value={value} onChange={(e) => onChange(e.target.value)} disabled={disabled} />
   </div>
 );
 
-const SliderTrait: React.FC<{ label: string; value: number; onChange: (v: number) => void }> = ({ label, value, onChange }) => (
+const SliderTrait: React.FC<{ label: string; value: number; onChange: (v: number) => void; disabled?: boolean }> = ({ label, value, onChange, disabled }) => (
   <div className="space-y-2">
     <div className="flex items-center justify-between">
       <Label>{label}</Label>
       <span className="tabular text-sm text-primary">{value}</span>
     </div>
-    <Slider value={[value]} min={0} max={100} step={1} onValueChange={(v) => onChange(v[0])} />
+    <Slider value={[value]} min={0} max={100} step={1} onValueChange={(v) => onChange(v[0])} disabled={disabled} />
   </div>
 );
 

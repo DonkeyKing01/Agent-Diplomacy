@@ -1,4 +1,4 @@
-import asyncio
+﻿import asyncio
 import logging
 import os
 import re
@@ -194,12 +194,12 @@ class DatabaseManager:
                 logger.error("Database engine not initialized")
                 raise RuntimeError("Database engine not initialized")
 
-            # logger.info("🔧 Starting table structure repair...")
-            # await self.check_and_repair_existing_tables()
-            # logger.info("🔧 Table structure repair completed")
+            logger.info("Starting table structure repair...")
+            await self.check_and_repair_existing_tables()
+            logger.info("Table structure repair completed")
 
             try:
-                logger.info("🔧 Starting table creation...")
+                logger.info("馃敡 Starting table creation...")
                 async with self.engine.begin() as conn:
                     await conn.run_sync(Base.metadata.create_all)
                     self._initialized = True
@@ -232,7 +232,7 @@ class DatabaseManager:
                 logger.info("No existing tables need repair")
                 return
 
-            logger.info(f"🔧 Repairing {len(tables_to_repair)} existing tables...")
+            logger.info(f"馃敡 Repairing {len(tables_to_repair)} existing tables...")
 
             semaphore = asyncio.Semaphore(10)
 
@@ -246,7 +246,7 @@ class DatabaseManager:
                 *[repair_with_semaphore(table_name) for table_name in tables_to_repair], return_exceptions=True
             )
 
-            logger.info(f"🔧 Table structure repair completed in {time.time() - repair_start:.4f}s")
+            logger.info(f"馃敡 Table structure repair completed in {time.time() - repair_start:.4f}s")
 
         except Exception as e:
             logger.error(f"Failed to repair existing tables: {e}")
@@ -287,7 +287,7 @@ class DatabaseManager:
             elif self.engine.dialect.name == "sqlite":
                 query = text("SELECT name FROM sqlite_master WHERE type='table'")
             else:
-                # MySQL 等其他数据库
+                # MySQL 绛夊叾浠栨暟鎹簱
                 query = text("SHOW TABLES")
 
             async with self.engine.begin() as conn:
@@ -562,3 +562,4 @@ async def get_db() -> AsyncSession:
     except Exception as e:
         logger.error(f"Failed to create database session: {e}", exc_info=True)
         raise
+

@@ -144,11 +144,16 @@ function mapBackendToGameState(backendState: BackendState): GameState {
     units,
     ownership,
     scCount,
-    trust: {},
+    trust: backendState.trust || {},
     conflicts: [],
     messages,
     reports,
     history,
+    governance: backendState.governance || {
+      system_prompt_edits_used: 0,
+      skills_edits_used: 0,
+      annual_advice_updated_years: [],
+    },
     endowment,
     nations,
     seed: 20260704,
@@ -307,7 +312,9 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       await apiUpdateAgent(payload);
     } catch (error) {
-      setError((error as { message?: string })?.message || 'Failed to update nation');
+      const message = (error as { message?: string })?.message || 'Failed to update nation';
+      setError(message);
+      throw new Error(message);
     }
   }, []);
 

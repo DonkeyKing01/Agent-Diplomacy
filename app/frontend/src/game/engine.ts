@@ -118,6 +118,12 @@ export interface HistoryEntry {
   scSnapshot: Record<string, number>;
 }
 
+export interface GovernanceState {
+  system_prompt_edits_used: number;
+  skills_edits_used: number;
+  annual_advice_updated_years: number[];
+}
+
 export interface GameState {
   status: GameStatus;
   year: number;
@@ -131,6 +137,7 @@ export interface GameState {
   messages: DiplomaticMessage[];
   reports: BattleReportItem[];
   history: HistoryEntry[];
+  governance: GovernanceState;
   endowment: Record<string, number>;
   nations: Nation[];
   seed: number;
@@ -404,6 +411,11 @@ export function createInitialState(endowment?: Record<string, number>): GameStat
       },
     ],
     history: [],
+    governance: {
+      system_prompt_edits_used: 0,
+      skills_edits_used: 0,
+      annual_advice_updated_years: [],
+    },
     endowment: endowment || defaultEndow,
     nations: JSON.parse(JSON.stringify(NATIONS)),
     seed: 20260704,

@@ -18,6 +18,8 @@ class Game_sessions(Base):
     sc_json = Column(String, nullable=True)
     nations_json = Column(String, nullable=True)
     last_orders_json = Column(String, nullable=True)
+    pending_retreats_json = Column(String, nullable=True)
+    governance_json = Column(String, nullable=True)
     engine = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), default=datetime.now)
     updated_at = Column(DateTime(timezone=True), default=datetime.now, onupdate=datetime.now)

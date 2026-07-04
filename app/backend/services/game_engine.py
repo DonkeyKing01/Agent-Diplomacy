@@ -256,8 +256,8 @@ def adjudicate(
     units: List[Dict[str, str]],
     orders: Dict[str, List[Dict[str, str]]],
     rng: random.Random,
-) -> Tuple[Dict[str, str], List[Dict[str, str]], List[Dict[str, Any]]]:
-    """Resolve one decision phase. Returns (new_provinces, new_units, conflicts)."""
+) -> Tuple[Dict[str, str], List[Dict[str, str]], List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Resolve one decision phase. Returns provinces, units, conflicts, pending_retreats."""
     unit_at = _unit_index(units)
 
     support_for: Dict[str, int] = {}  # "origin>dest" -> support count
@@ -300,6 +300,8 @@ def adjudicate(
     conflicts: List[Dict[str, Any]] = []
     winners_at: Dict[str, str] = {}
     moved_from: set = set()
+    standoff_provinces: set = set()
+    dislodged_units: List[Dict[str, Any]] = []
 
     for dest, movers in move_intents.items():
         contenders = list(movers)
@@ -311,6 +313,7 @@ def adjudicate(
         defs = [c for c in top if c.get("is_def")]
         if len(top) > 1 and not defs:
             # contested standoff: nobody moves in
+            standoff_provinces.add(dest)
             conflicts.append({
                 "province": dest, "province_name": province_name(dest),
                 "kind": "争夺", "winner": "", "losers": [nation_name(m["nation"]) for m in movers],
@@ -327,6 +330,16 @@ def adjudicate(
             winners_at[dest] = winner["nation"]
             moved_from.add(winner["from"])
             losers = [nation_name(c["nation"]) for c in contenders if c is not winner]
+            defender_unit = unit_at.get(dest)
+            if defender and defender_unit and defender_unit["owner"] != winner["nation"]:
+                dislodged_units.append(
+                    {
+                        "owner": defender_unit["owner"],
+                        "type": defender_unit["type"],
+                        "location": dest,
+                        "attacked_from": winner["from"],
+                    }
+                )
             conflicts.append({
                 "province": dest, "province_name": province_name(dest),
                 "kind": "占领变化" if not defender else "进攻",
@@ -350,7 +363,32 @@ def adjudicate(
     for u in new_units:
         if PROVINCES.get(u["location"], {}).get("type") != "sea":
             new_provinces[u["location"]] = u["owner"]
-    return new_provinces, new_units, conflicts
+    occupied_after_moves = {unit["location"] for unit in new_units}
+    pending_retreats: List[Dict[str, Any]] = []
+    for dislodged in dislodged_units:
+        unit_type = dislodged["type"]
+        location = dislodged["location"]
+        legal_retreats: List[str] = []
+        for province_id in PROVINCES.get(location, {}).get("adj", []):
+            if province_id == dislodged["attacked_from"]:
+                continue
+            if province_id in occupied_after_moves:
+                continue
+            if province_id in standoff_provinces:
+                continue
+            if not _army_can_enter(unit_type, province_id):
+                continue
+            legal_retreats.append(province_id)
+        pending_retreats.append(
+            {
+                "owner": dislodged["owner"],
+                "type": unit_type,
+                "location": location,
+                "attacked_from": dislodged["attacked_from"],
+                "legal_retreats": legal_retreats,
+            }
+        )
+    return new_provinces, new_units, conflicts, pending_retreats
 
 
 def resolve_winter(
