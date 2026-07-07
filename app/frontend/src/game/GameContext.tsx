@@ -25,23 +25,6 @@ export type SettingsSource = 'map' | 'control' | 'messages' | 'history' | 'index
 
 const NATION_META: Record<string, Nation> = Object.fromEntries(NATIONS.map((nation) => [nation.id, nation]));
 
-function deriveTraits(
-  base: Nation['traits'],
-  aggression: number,
-  cunning: number,
-  loyalty: number,
-): Nation['traits'] {
-  return {
-    ...base,
-    expansion: aggression,
-    cunning,
-    vengeance: Math.max(0, Math.min(100, 100 - loyalty + Math.round(cunning / 4))),
-    diplomacy: cunning > 65 ? '操控性强' : cunning > 45 ? '暧昧试探' : '冷静理智',
-    risk: aggression > 75 ? '豪赌型' : aggression > 50 ? '机会主义' : '稳健运营',
-    honor: loyalty > 70 ? '守信' : loyalty > 45 ? '灵活务实' : '纯粹务实',
-  };
-}
-
 function mapBackendToGameState(backendState: BackendState): GameState {
   const ownership: Record<string, string | null> = {};
   Object.entries(backendState.ownership || {}).forEach(([provinceId, owner]) => {
@@ -70,7 +53,7 @@ function mapBackendToGameState(backendState: BackendState): GameState {
       skills: agent.skills_md || meta.skills,
       memory: agent.memory || meta.memory,
       yearlyAdvice: agent.annual_advice || meta.yearlyAdvice,
-      traits: deriveTraits(meta.traits, agent.aggression, agent.cunning, agent.loyalty),
+      traits: { ...meta.traits },
     };
   });
 
@@ -301,6 +284,8 @@ function mapBackendToGameState(backendState: BackendState): GameState {
     governance: {
       system_prompt_edits_used: backendState.governance?.system_prompt_edits_used ?? 0,
       skills_edits_used: backendState.governance?.skills_edits_used ?? 0,
+      system_prompt_updated_nations: backendState.governance?.system_prompt_updated_nations || [],
+      skills_updated_nations: backendState.governance?.skills_updated_nations || [],
       annual_advice_updated_years: backendState.governance?.annual_advice_updated_years || [],
       annual_advice_updated_years_by_nation: backendState.governance?.annual_advice_updated_years_by_nation || {},
       annual_advice_effective_years: backendState.governance?.annual_advice_effective_years || {},
@@ -483,11 +468,6 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (patch.skills !== undefined) payload.skills_md = patch.skills;
     if (patch.memory !== undefined) payload.memory = patch.memory;
     if (patch.yearlyAdvice !== undefined) payload.annual_advice = patch.yearlyAdvice;
-    if (patch.traits?.expansion !== undefined) payload.aggression = patch.traits.expansion;
-    if (patch.traits?.cunning !== undefined) payload.cunning = patch.traits.cunning;
-    if (patch.traits?.vengeance !== undefined) {
-      payload.loyalty = Math.max(0, Math.min(100, 100 - patch.traits.vengeance));
-    }
 
     try {
       await apiUpdateAgent(payload);

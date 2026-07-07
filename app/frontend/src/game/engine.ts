@@ -1,6 +1,6 @@
 /**
  * Agent Diplomacy 核心引擎（纯数据与逻辑，无 React 依赖）。
- * 提供：类型定义、十个架空国家、战棋六边形网格地图省份、初始局势，
+ * 提供：类型定义、十个排、战棋六边形网格地图省份、初始局势，
  * 以及确定性（seeded）的阶段推进模拟，生成单位移动、冲突、外交密信、战报与历史。
  *
  * 地图采用真正的 flat-top 六边形战棋网格（见 hexmap.ts）：所有省份（陆地/沿海/海域）
@@ -122,6 +122,8 @@ export interface HistoryEntry {
 export interface GovernanceState {
   system_prompt_edits_used: number;
   skills_edits_used: number;
+  system_prompt_updated_nations?: string[];
+  skills_updated_nations?: string[];
   annual_advice_updated_years: number[];
   annual_advice_updated_years_by_nation?: Record<string, number[]>;
   annual_advice_effective_years?: Record<string, number>;
@@ -281,99 +283,99 @@ export function phaseAt(index: number) {
 }
 
 // ---------------------------------------------------------------------------
-// 十个架空国家
+// 十个排
 // ---------------------------------------------------------------------------
 
 export const NATIONS: Nation[] = [
   {
-    id: 'aur', name: '奥瑞利亚帝国', short: '奥瑞利亚', color: '#e0533f',
-    homeCenters: ['aur_cap', 'aur_port', 'aur_north', 'aur_march'],
-    systemPrompt: '你是奥瑞利亚帝国，一个信奉铁血现实主义的老牌陆权大国。你重视版图与威慑，视外交承诺为缓兵之计，绝不因情面放弃可乘之机。',
-    skills: '# 开局\n优先与南方邻国签订互不侵犯以专注北扩。\n# 背刺\n当盟友主力远征、其大本营空虚时，评估背刺收益。\n# 冬季\n陆地压力大时优先造 Army。',
+    id: 'aur', name: '一排领地', short: '一排', color: '#e0533f',
+    homeCenters: ['aur_march', 'aur_port', 'aur_north', 'aur_cap'],
+    systemPrompt: '你是一排领地的最高决策智能体，位于西北岛。先稳住本岛北侧，再争夺中央公共领地。',
+    skills: '# 开局\n守住西北岛上半区，抢占中央北港。\n# 岛间\n舰队优先控海，陆军跨海前确认 Convoy 链路。\n# 风控\n不要同时放空本岛门户和中央前线。',
     memory: '信誉白名单：暂无。\n血仇黑名单：暂无。\n历史偏见层：初始中立。',
-    yearlyAdvice: '首年目标：稳固北境三城，避免多线树敌。',
-    traits: { temperament: '激进扩张', risk: '机会主义', honor: '视承诺为缓兵之计', vengeance: 65, expansion: 88, cunning: 52, diplomacy: '冷静理智' },
+    yearlyAdvice: '守住西北岛上半区，抢占中央北港。',
+    traits: { temperament: '稳步扩张', risk: '机会主义', honor: '灵活务实', vengeance: 58, expansion: 74, cunning: 56, diplomacy: '冷静理智' },
   },
   {
-    id: 'mar', name: '玛琳诺海洋共和国', short: '玛琳诺', color: '#2d8fd0',
+    id: 'mar', name: '二排领地', short: '二排', color: '#2d8fd0',
     homeCenters: ['mar_cap', 'mar_isle', 'mar_dock', 'mar_shoal'],
-    systemPrompt: '你是玛琳诺海洋共和国，以商贸与制海权立国。你偏好经济收益与海上通道，厌恶无意义的陆地消耗战，善于用金钱与情报换取安全。',
-    skills: '# 开局\n控制近海通道，保证 Convoy 能力。\n# 联盟\n以贸易协定换取陆权国家的防线协同 Support。\n# 冬季\n近海威胁大时优先造 Fleet。',
+    systemPrompt: '你是二排领地的最高决策智能体，位于西南岛。你重视海军机动与西南航道。',
+    skills: '# 开局\n控制西南航道，必要时从灯塔岛方向跨海压迫。\n# 海军\n优先维持舰队互相接应。\n# 外交\n以护航和航道安全换取临时合作。',
     memory: '信誉白名单：暂无。\n血仇黑名单：暂无。',
-    yearlyAdvice: '首年目标：掌控中央海域，确保跨海护航畅通。',
-    traits: { temperament: '绝对现实主义', risk: '稳健运营', honor: '重利益轻虚名', vengeance: 30, expansion: 55, cunning: 82, diplomacy: '操控性强' },
+    yearlyAdvice: '控制西南航道，必要时从灯塔岛方向跨海压迫。',
+    traits: { temperament: '海权机动', risk: '稳健运营', honor: '重利益轻虚名', vengeance: 46, expansion: 58, cunning: 70, diplomacy: '操控性强' },
   },
   {
-    id: 'vel', name: '维尔登王国', short: '维尔登', color: '#6f57c8',
-    homeCenters: ['vel_cap', 'vel_hill', 'vel_ford', 'vel_keep'],
-    systemPrompt: '你是维尔登王国，浪漫的骑士之国，视盟约为荣誉的化身。你极端厌恶公开背叛，一旦被背叛将触发长期报复。',
-    skills: '# 开局\n寻找一位值得信赖的长期盟友并全力维护。\n# 荣誉\n绝不首先撕毁公开协议。\n# 报复\n被背叛后进入无限期复仇。',
+    id: 'vel', name: '三排领地', short: '三排', color: '#6f57c8',
+    homeCenters: ['vel_cap', 'vel_keep', 'vel_harbor', 'windward_key'],
+    systemPrompt: '你是三排领地的最高决策智能体，位于东南岛。你需要稳住南线并争夺中央南镇。',
+    skills: '# 开局\n稳住东南本岛，优先争取中央南镇。\n# 联盟\n可寻找一个长期盟友，但不能放弃补给中心收益。\n# 报复\n遭背刺后提高复仇权重。',
     memory: '信誉白名单：暂无。\n血仇黑名单：暂无。',
-    yearlyAdvice: '首年目标：缔结一份坚实的互保盟约。',
-    traits: { temperament: '浪漫主义（重盟约）', risk: '稳健运营', honor: '视承诺为绝对约束', vengeance: 92, expansion: 48, cunning: 44, diplomacy: '冠冕堂皇' },
+    yearlyAdvice: '稳住东南本岛，优先争取中央南镇。',
+    traits: { temperament: '守信但会反击', risk: '稳健运营', honor: '重视承诺', vengeance: 72, expansion: 56, cunning: 42, diplomacy: '冠冕堂皇' },
   },
   {
-    id: 'kaz', name: '卡兹汗国', short: '卡兹', color: '#d98a2b',
-    homeCenters: ['kaz_cap', 'kaz_steppe', 'kaz_oasis', 'kaz_ford'],
-    systemPrompt: '你是卡兹汗国，来自东方草原的机动豪赌者。你偏好突袭与高风险高回报，善于在混乱中攫取补给中心。',
-    skills: '# 开局\n试探最薄弱的邻国边境。\n# 豪赌\n发现暴露的 SC 立即以骑兵闪击。\n# 生存\n弱势时挑拨两大国相斗。',
+    id: 'kaz', name: '四排领地', short: '四排', color: '#d98a2b',
+    homeCenters: ['mt_goldwall', 'kaz_cap', 'kaz_oasis', 'kaz_ford'],
+    systemPrompt: '你是四排领地的最高决策智能体，位于东北岛。你偏好主动出击和抢先占位。',
+    skills: '# 开局\n从东北本岛主动出击，争夺北中岛。\n# 突击\n发现空置 SC 应快速压上。\n# 风控\n突击后要留下可支援退路。',
     memory: '信誉白名单：暂无。\n血仇黑名单：暂无。',
-    yearlyAdvice: '首年目标：闪击一处邻国边境补给中心。',
-    traits: { temperament: '激进扩张', risk: '豪赌型', honor: '毫不在意背叛', vengeance: 45, expansion: 90, cunning: 68, diplomacy: '暧昧试探' },
+    yearlyAdvice: '从东北本岛主动出击，争夺北中岛。',
+    traits: { temperament: '激进扩张', risk: '豪赌型', honor: '灵活务实', vengeance: 62, expansion: 78, cunning: 58, diplomacy: '暧昧试探' },
   },
   {
-    id: 'sol', name: '索拉里斯教国', short: '索拉里斯', color: '#e6c229',
-    homeCenters: ['sol_cap', 'sol_temple', 'sol_plain', 'sol_gate'],
-    systemPrompt: '你是索拉里斯教国，以信仰凝聚人心的神权国家。你善于以道义与说教包装扩张，虚荣心强，极度敏感于公开羞辱。',
-    skills: '# 开局\n以圣战名义争取周边小国归附。\n# 外交\n用道德高地施压对手。\n# 情绪\n被夺城视为奇耻大辱，触发报复。',
+    id: 'sol', name: '五排领地', short: '五排', color: '#e6c229',
+    homeCenters: ['kaz_steppe', 'sol_gate', 'sol_cap', 'sol_plain'],
+    systemPrompt: '你是五排领地的最高决策智能体，位于右岛西岸，天然贴近中央公共区。',
+    skills: '# 开局\n守住右岛西岸，围绕中央码头建立缓冲。\n# 中央区\n优先拿能形成支援链的公共 SC。\n# 外交\n以道义包装扩张，但以收益为准。',
     memory: '信誉白名单：暂无。\n血仇黑名单：暂无。',
-    yearlyAdvice: '首年目标：以宗教影响力拉拢一个中立缓冲区。',
-    traits: { temperament: '虚荣心', risk: '机会主义', honor: '善于道德包装', vengeance: 70, expansion: 66, cunning: 58, diplomacy: '冠冕堂皇' },
+    yearlyAdvice: '守住右岛西岸，围绕中央码头建立缓冲。',
+    traits: { temperament: '外柔内扩', risk: '机会主义', honor: '善于包装', vengeance: 62, expansion: 64, cunning: 64, diplomacy: '冠冕堂皇' },
   },
   {
-    id: 'nor', name: '诺瓦克联邦', short: '诺瓦克', color: '#3aa676',
-    homeCenters: ['nor_cap', 'nor_lake', 'nor_wood', 'nor_harbor'],
-    systemPrompt: '你是诺瓦克联邦，一个谨慎的联邦制中立国。你偏安稳健，倾向于筑起防线、后发制人，除非被逼到墙角才反击。',
-    skills: '# 开局\n与所有邻国签订互不侵犯。\n# 防守\n以 Support 加固防线。\n# 反击\n仅在被入侵时倾力反击。',
+    id: 'nor', name: '六排领地', short: '六排', color: '#3aa676',
+    homeCenters: ['sea_west_inlet', 'nor_lake', 'nor_harbor', 'vel_ford'],
+    systemPrompt: '你是六排领地的最高决策智能体，位于左岛南部。你擅长筑线和反打。',
+    skills: '# 开局\n先筑稳左岛南线，再向中央南港试探推进。\n# 防守\n用 Support 形成互保阵型。\n# 机会\n邻国露出空置 SC 时要及时接收。',
     memory: '信誉白名单：暂无。\n血仇黑名单：暂无。',
-    yearlyAdvice: '首年目标：建立稳固防线，避免卷入争端。',
-    traits: { temperament: '保守偏安', risk: '稳健运营', honor: '守信', vengeance: 40, expansion: 35, cunning: 38, diplomacy: '冷静理智' },
+    yearlyAdvice: '先筑稳左岛南线，再向中央南港试探推进。',
+    traits: { temperament: '谨慎防守', risk: '稳健运营', honor: '守信', vengeance: 48, expansion: 46, cunning: 44, diplomacy: '冷静理智' },
   },
   {
-    id: 'ferr', name: '费罗斯工业同盟', short: '费罗斯', color: '#b0563e',
+    id: 'ferr', name: '七排领地', short: '七排', color: '#b0563e',
     homeCenters: ['ferr_cap', 'ferr_forge', 'ferr_mine', 'ferr_works'],
-    systemPrompt: '你是费罗斯工业同盟，以钢铁与产能著称的实用主义强权。你以效率与产出衡量一切，冷酷务实，不为情绪左右。',
-    skills: '# 开局\n评估产能，规划最优扩张路线。\n# 效率\n以最小代价攫取 SC。\n# 冬季\n以产能优势快速补充损失。',
+    systemPrompt: '你是七排领地的最高决策智能体，位于左岛中部。你重视产能、支援链和稳定扩张。',
+    skills: '# 开局\n连成左岛中部防线，优先吃下中央丘陵。\n# 作战\n避免单点裸冲，尽量让相邻单位互相支援。\n# 收益\n优先争夺近处 SC。',
     memory: '信誉白名单：暂无。\n血仇黑名单：暂无。',
-    yearlyAdvice: '首年目标：以最优路线夺取一处工业 SC。',
-    traits: { temperament: '绝对现实主义', risk: '稳健运营', honor: '纯粹务实', vengeance: 25, expansion: 72, cunning: 54, diplomacy: '冷静理智' },
+    yearlyAdvice: '连成左岛中部防线，优先吃下中央丘陵。',
+    traits: { temperament: '务实扩张', risk: '稳健运营', honor: '纯粹务实', vengeance: 44, expansion: 68, cunning: 50, diplomacy: '冷静理智' },
   },
   {
-    id: 'zeph', name: '泽菲兰群岛联盟', short: '泽菲兰', color: '#4cc0c0',
+    id: 'zeph', name: '八排领地', short: '八排', color: '#4cc0c0',
     homeCenters: ['zeph_cap', 'zeph_reef', 'zeph_bay', 'zeph_atoll'],
-    systemPrompt: '你是泽菲兰群岛联盟，散布于群岛之间的海上游牧联盟。你灵活多变、善于试探，依赖海军与护航生存。',
-    skills: '# 开局\n用 Fleet 控制岛链之间的海域。\n# 试探\n以模糊承诺周旋于列强之间。\n# 护航\n为盟友提供 Convoy 换取庇护。',
+    systemPrompt: '你是八排领地的最高决策智能体，位于右岛东岸。你依赖舰队、侧袭和海峡机动。',
+    skills: '# 开局\n保持东侧海军机动，争夺东桥镇和海峡控制权。\n# 海军\n舰队不要孤军深入，优先保持互相接应。\n# 外交\n用模糊承诺争取时间。',
     memory: '信誉白名单：暂无。\n血仇黑名单：暂无。',
-    yearlyAdvice: '首年目标：控制岛链海域，保持中立弹性。',
-    traits: { temperament: '机会主义', risk: '机会主义', honor: '灵活', vengeance: 35, expansion: 50, cunning: 66, diplomacy: '暧昧试探' },
+    yearlyAdvice: '保持东侧海军机动，争夺东桥镇和海峡控制权。',
+    traits: { temperament: '机会主义', risk: '机会主义', honor: '灵活', vengeance: 44, expansion: 54, cunning: 68, diplomacy: '暧昧试探' },
   },
   {
-    id: 'dra', name: '德拉肯高地', short: '德拉肯', color: '#8a8f98',
-    homeCenters: ['dra_cap', 'dra_peak', 'dra_watch', 'dra_pass'],
-    systemPrompt: '你是德拉肯高地，盘踞群山的坚韧防御型山地国家。你多疑谨慎，视地形为盟友，倾向于据险自守、有仇必报。',
-    skills: '# 开局\n扼守山口要隘。\n# 防守\n利用地形以少胜多。\n# 记仇\n对入侵者进行针对性反击。',
+    id: 'dra', name: '九排领地', short: '九排', color: '#8a8f98',
+    homeCenters: ['mt_skytooth', 'mt_winterkeep', 'dra_watch', 'dra_peak'],
+    systemPrompt: '你是九排领地的最高决策智能体，位于左岛北端。你需要守住北端并伺机进入北中岛。',
+    skills: '# 开局\n守住左岛北端，伺机进入北中岛。\n# 防守\n利用相邻支援稳住山脚和高地。\n# 反击\n确认对手空虚时再推进。',
     memory: '信誉白名单：暂无。\n血仇黑名单：暂无。',
-    yearlyAdvice: '首年目标：扼守两处山口，静观其变。',
-    traits: { temperament: '疑心病', risk: '稳健运营', honor: '守信但多疑', vengeance: 80, expansion: 40, cunning: 50, diplomacy: '冷静理智' },
+    yearlyAdvice: '守住左岛北端，伺机进入北中岛。',
+    traits: { temperament: '谨慎反打', risk: '稳健运营', honor: '守信但多疑', vengeance: 64, expansion: 48, cunning: 54, diplomacy: '冷静理智' },
   },
   {
-    id: 'ith', name: '伊萨里绿洲城邦', short: '伊萨里', color: '#c86fa0',
+    id: 'ith', name: '十排领地', short: '十排', color: '#c86fa0',
     homeCenters: ['ith_cap', 'ith_market', 'ith_spring', 'ith_garden'],
-    systemPrompt: '你是伊萨里绿洲城邦，沙漠中的富庶商栈之国。你弱小而精明，善于用财富与情报在夹缝中求生，靠挑拨强国矛盾自保。',
-    skills: '# 开局\n以中立姿态与所有强国通商。\n# 生存\n单城危机时挑拨两大国相斗。\n# 情报\n以密信情报换取庇护。',
+    systemPrompt: '你是十排领地的最高决策智能体，位于右岛中部。你靠交易、情报和局部借力扩张。',
+    skills: '# 开局\n以交易换安全，利用东桥镇挑动右岛内斗。\n# 生存\n避免正面硬扛两个邻居。\n# 情报\n用密信换支援，但保留后手。',
     memory: '信誉白名单：暂无。\n血仇黑名单：暂无。',
-    yearlyAdvice: '首年目标：维持中立，广结善缘以图自保。',
-    traits: { temperament: '保守偏安', risk: '机会主义', honor: '灵活务实', vengeance: 30, expansion: 30, cunning: 78, diplomacy: '操控性强' },
+    yearlyAdvice: '以交易换安全，利用东桥镇挑动右岛内斗。',
+    traits: { temperament: '精明交易', risk: '机会主义', honor: '灵活务实', vengeance: 46, expansion: 42, cunning: 74, diplomacy: '操控性强' },
   },
 ];
 
@@ -433,34 +435,34 @@ export function mapViewBox(): { x: number; y: number; width: number; height: num
 const INITIAL_UNITS: { owner: string; type: UnitType; location: string }[] = [
   { owner: 'aur', type: 'Fleet', location: 'aur_march' },
   { owner: 'aur', type: 'Army', location: 'aur_cap' },
-  { owner: 'aur', type: 'Army', location: 'aur_north' },
+  { owner: 'aur', type: 'Fleet', location: 'aur_port' },
   { owner: 'mar', type: 'Fleet', location: 'mar_dock' },
   { owner: 'mar', type: 'Fleet', location: 'mar_shoal' },
-  { owner: 'mar', type: 'Fleet', location: 'mar_isle' },
-  { owner: 'vel', type: 'Army', location: 'vel_ford' },
+  { owner: 'mar', type: 'Army', location: 'mar_cap' },
+  { owner: 'vel', type: 'Fleet', location: 'windward_key' },
   { owner: 'vel', type: 'Army', location: 'vel_cap' },
-  { owner: 'vel', type: 'Army', location: 'vel_hill' },
+  { owner: 'vel', type: 'Army', location: 'vel_keep' },
   { owner: 'kaz', type: 'Fleet', location: 'kaz_ford' },
   { owner: 'kaz', type: 'Army', location: 'kaz_cap' },
-  { owner: 'kaz', type: 'Army', location: 'kaz_steppe' },
+  { owner: 'kaz', type: 'Army', location: 'kaz_oasis' },
+  { owner: 'sol', type: 'Fleet', location: 'kaz_steppe' },
   { owner: 'sol', type: 'Army', location: 'sol_plain' },
   { owner: 'sol', type: 'Army', location: 'sol_cap' },
-  { owner: 'sol', type: 'Army', location: 'sol_temple' },
+  { owner: 'nor', type: 'Fleet', location: 'sea_west_inlet' },
   { owner: 'nor', type: 'Army', location: 'nor_lake' },
-  { owner: 'nor', type: 'Army', location: 'nor_wood' },
-  { owner: 'nor', type: 'Army', location: 'nor_cap' },
+  { owner: 'nor', type: 'Army', location: 'vel_ford' },
   { owner: 'ferr', type: 'Fleet', location: 'ferr_forge' },
   { owner: 'ferr', type: 'Army', location: 'ferr_mine' },
   { owner: 'ferr', type: 'Army', location: 'ferr_cap' },
   { owner: 'zeph', type: 'Fleet', location: 'zeph_reef' },
   { owner: 'zeph', type: 'Fleet', location: 'zeph_cap' },
   { owner: 'zeph', type: 'Fleet', location: 'zeph_bay' },
+  { owner: 'dra', type: 'Fleet', location: 'mt_skytooth' },
   { owner: 'dra', type: 'Army', location: 'dra_watch' },
-  { owner: 'dra', type: 'Army', location: 'dra_cap' },
   { owner: 'dra', type: 'Army', location: 'dra_peak' },
+  { owner: 'ith', type: 'Fleet', location: 'ith_spring' },
   { owner: 'ith', type: 'Army', location: 'ith_garden' },
   { owner: 'ith', type: 'Army', location: 'ith_cap' },
-  { owner: 'ith', type: 'Army', location: 'ith_market' },
 ];
 
 function initialOwnership(): Record<string, string | null> {
@@ -555,6 +557,8 @@ export function createInitialState(endowment?: Record<string, number>): GameStat
     governance: {
       system_prompt_edits_used: 0,
       skills_edits_used: 0,
+      system_prompt_updated_nations: [],
+      skills_updated_nations: [],
       annual_advice_updated_years: [],
       annual_advice_updated_years_by_nation: {},
       annual_advice_effective_years: {},

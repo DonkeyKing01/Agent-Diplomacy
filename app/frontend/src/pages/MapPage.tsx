@@ -1,15 +1,19 @@
 import React, { useMemo, useState } from 'react';
 import {
+  Brain,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
   ChevronUp,
   Crown,
   History,
+  Loader2,
+  Play,
   RotateCcw,
   Settings2,
   Swords,
 } from 'lucide-react';
+import { toast } from 'sonner';
 import { useGame } from '@/game/GameContext';
 import { GameState, PROVINCE_MAP, createInitialState, phaseAt, unitsOf } from '@/game/engine';
 import { reportHighlightsFromReports } from '@/game/battleReports';
@@ -29,13 +33,16 @@ const STATUS_LABEL: Record<string, string> = {
 };
 
 const INITIAL_OWNERSHIP = createInitialState().ownership;
+const INITIAL_STATE = createInitialState();
 
 const MapPage: React.FC = () => {
-  const { state, openSettings } = useGame();
+  const { state, ready, busy, engine, startGameAction, finishPreparationAction, advance, openSettings } = useGame();
   const [reportsExpanded, setReportsExpanded] = useState(false);
   const [reviewOffset, setReviewOffset] = useState(0);
   const [selectedProvinceId, setSelectedProvinceId] = useState<string | null>(null);
+  const [selectedDetailState, setSelectedDetailState] = useState<GameState | null>(null);
   const phase = phaseAt(state.phaseIndex);
+  const reasoning = busy && ready && state.status !== 'preparing';
 
   const ranked = useMemo(
     () => [...state.nations].sort((a, b) => (state.scCount[b.id] || 0) - (state.scCount[a.id] || 0)),
@@ -71,6 +78,27 @@ const MapPage: React.FC = () => {
     };
   }, [activeSnapshot, state]);
 
+  const comparisonPreviousMapState = useMemo<GameState>(() => {
+    if (!activeReport) {
+      return INITIAL_STATE;
+    }
+    const olderReport = recentReports[safeOffset + 1];
+    if (!olderReport) {
+      return INITIAL_STATE;
+    }
+    const olderSnapshot = state.phaseSnapshots.find((snapshot) => snapshot.reportId === olderReport.id);
+    if (!olderSnapshot) {
+      return INITIAL_STATE;
+    }
+    return {
+      ...state,
+      ownership: olderSnapshot.ownership,
+      units: olderSnapshot.units,
+      scCount: olderSnapshot.scCount,
+      conflicts: [],
+    };
+  }, [activeReport, recentReports, safeOffset, state]);
+
   const reportHighlights = useMemo(
     () => (activeReport ? reportHighlightsFromReports([activeReport]) : []),
     [activeReport],
@@ -78,15 +106,66 @@ const MapPage: React.FC = () => {
 
   const reviewLabel = activeSnapshot?.phaseLabel || activeReport?.phaseLabel || '';
 
-  const previousOwnershipForActiveReport = useMemo(() => {
-    if (!activeReport) return undefined;
-    const olderReport = recentReports[safeOffset + 1];
-    if (!olderReport) {
-      return INITIAL_OWNERSHIP;
+  const previousOwnershipForActiveReport = activeReport ? comparisonPreviousMapState.ownership || INITIAL_OWNERSHIP : undefined;
+
+  const openProvince = (provinceId: string, detailState: GameState) => {
+    setSelectedProvinceId(provinceId);
+    setSelectedDetailState(detailState);
+  };
+
+  const handleInitialize = async () => {
+    const ok = await startGameAction();
+    if (!ok) {
+      toast.error('后端初始化失败，请检查服务状态');
+      return;
     }
-    const olderSnapshot = state.phaseSnapshots.find((snapshot) => snapshot.reportId === olderReport.id);
-    return olderSnapshot?.ownership || INITIAL_OWNERSHIP;
-  }, [activeReport, recentReports, safeOffset, state.phaseSnapshots]);
+    toast.success('对局已初始化，已进入开局准备阶段');
+  };
+
+  const handleFinishPreparation = async () => {
+    const ok = await finishPreparationAction();
+    if (!ok) {
+      toast.error('结束准备失败，请检查后端状态');
+      return;
+    }
+    toast.success('准备结束，1901 年春季谈判与决策正式开始');
+  };
+
+  const handleAdvance = async () => {
+    if (state.status === 'finished') {
+      toast('本局已结束，如需继续请重置对局');
+      return;
+    }
+
+    toast('各国智能体推理中，正在生成真实外交与军事决策');
+    const ok = await advance();
+    if (!ok) {
+      toast.error('阶段推进失败，请查看后端报错');
+      return;
+    }
+    toast.success('本阶段已推进并完成结算');
+  };
+
+  const primaryAction = !ready
+    ? {
+        label: busy ? '正在初始化' : '初始化对局',
+        icon: busy ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Play className="mr-1.5 h-4 w-4" />,
+        onClick: handleInitialize,
+        disabled: busy,
+      }
+    : state.status === 'preparing'
+      ? {
+          label: busy ? '正在结束准备' : '结束准备',
+          icon: busy ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Play className="mr-1.5 h-4 w-4" />,
+          onClick: handleFinishPreparation,
+          disabled: busy,
+        }
+      : {
+          label: reasoning ? '智能体推理中' : '推进阶段',
+          icon: reasoning ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <ChevronRight className="mr-1.5 h-4 w-4" />,
+          onClick: handleAdvance,
+          disabled: state.status === 'finished' || busy,
+        };
 
   return (
     <AppShell>
@@ -160,6 +239,21 @@ const MapPage: React.FC = () => {
               局势：{STATUS_LABEL[state.status]}
             </span>
 
+            <span
+              className={cn(
+                'hidden items-center gap-1 rounded-full border px-2 py-1 text-xs xl:flex',
+                engine === 'llm' ? 'border-accent/50 text-accent' : 'border-border text-muted-foreground',
+              )}
+            >
+              <Brain className="h-3 w-3" />
+              {engine === 'llm' ? '真实 LLM' : '回退模式'}
+            </span>
+
+            <Button size="sm" onClick={primaryAction.onClick} disabled={primaryAction.disabled}>
+              {primaryAction.icon}
+              {primaryAction.label}
+            </Button>
+
             <Button
               variant="outline"
               size="sm"
@@ -174,11 +268,22 @@ const MapPage: React.FC = () => {
 
         <div className="flex min-h-0 flex-1">
           <div className="min-w-0 flex-1 p-1.5">
-            <div className="h-full min-h-[420px] overflow-hidden rounded-lg border border-border">
-              <StrategicMap
+            <div className="grid h-full min-h-[420px] grid-cols-1 gap-2 xl:grid-cols-2">
+              <MapComparisonCard
+                title="上一阶段"
+                subtitle={
+                  activeReport
+                    ? recentReports[safeOffset + 1]?.phaseLabel || '开局初始态'
+                    : '开局初始态'
+                }
+                state={comparisonPreviousMapState}
+                onProvinceClick={(provinceId) => openProvince(provinceId, comparisonPreviousMapState)}
+              />
+              <MapComparisonCard
+                title={isReviewingHistory ? '所选阶段' : '本阶段'}
+                subtitle={reviewLabel || `${state.year} ${phase.label}`}
                 state={mapState}
-                className="h-full w-full"
-                onProvinceClick={(provinceId) => setSelectedProvinceId(provinceId)}
+                onProvinceClick={(provinceId) => openProvince(provinceId, mapState)}
                 reportHighlights={reportHighlights}
               />
             </div>
@@ -296,10 +401,11 @@ const MapPage: React.FC = () => {
         onOpenChange={(open) => {
           if (!open) {
             setSelectedProvinceId(null);
+            setSelectedDetailState(null);
           }
         }}
         provinceId={selectedProvinceId}
-        state={mapState}
+        state={selectedDetailState || mapState}
         referenceReport={activeReport}
         allSnapshots={state.phaseSnapshots}
         previousOwnership={previousOwnershipForActiveReport}
@@ -312,6 +418,32 @@ const Stat: React.FC<{ label: string; value: string }> = ({ label, value }) => (
   <div>
     <div className="text-[11px] text-muted-foreground">{label}</div>
     <div className="text-base font-semibold">{value}</div>
+  </div>
+);
+
+const MapComparisonCard: React.FC<{
+  title: string;
+  subtitle: string;
+  state: GameState;
+  onProvinceClick: (provinceId: string) => void;
+  reportHighlights?: React.ComponentProps<typeof StrategicMap>['reportHighlights'];
+}> = ({ title, subtitle, state, onProvinceClick, reportHighlights }) => (
+  <div className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-border bg-card/40">
+    <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border bg-card/70 px-3 py-2">
+      <div className="min-w-0">
+        <div className="text-sm font-semibold text-foreground">{title}</div>
+        <div className="truncate text-xs text-muted-foreground">{subtitle}</div>
+      </div>
+      <div className="tabular text-xs text-primary">
+        {Object.values(state.scCount).reduce((sum, value) => sum + (value || 0), 0)} SC
+      </div>
+    </div>
+    <StrategicMap
+      state={state}
+      className="min-h-0 flex-1"
+      onProvinceClick={onProvinceClick}
+      reportHighlights={reportHighlights}
+    />
   </div>
 );
 

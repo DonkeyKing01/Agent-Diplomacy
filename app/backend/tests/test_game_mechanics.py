@@ -6,12 +6,16 @@ from routers.game import (
     _build_memory_brief,
     _compose_persistent_memory,
     _default_governance_state,
+    _governance_nation_edits,
+    _missing_annual_advice_nations,
+    _record_governance_nation_edit,
     _record_annual_advice_update,
     _validate_messages,
     _validate_orders,
 )
 from services import game_logs
 from services.game_engine import adjudicate
+from services.game_engine import HOME_CENTERS, NATIONS, PROVINCES, initial_board
 
 
 def test_annual_advice_applies_from_effective_year_onward():
@@ -42,6 +46,27 @@ def test_annual_advice_limits_are_tracked_per_nation_not_globally():
 
     assert _annual_advice_years_for_nation(governance, "aur") == [1904]
     assert _annual_advice_years_for_nation(governance, "nor") == []
+
+
+def test_prompt_and_skills_revision_limits_are_tracked_per_nation():
+    governance = _default_governance_state()
+
+    _record_governance_nation_edit(governance, "system_prompt_updated_nations", "aur")
+    _record_governance_nation_edit(governance, "system_prompt_updated_nations", "aur")
+    _record_governance_nation_edit(governance, "skills_updated_nations", "nor")
+
+    assert _governance_nation_edits(governance, "system_prompt_updated_nations") == {"aur"}
+    assert governance["system_prompt_edits_used"] == 1
+    assert _governance_nation_edits(governance, "skills_updated_nations") == {"nor"}
+    assert governance["skills_edits_used"] == 1
+
+
+def test_review_annual_advice_requirement_ignores_eliminated_nations():
+    governance = _default_governance_state()
+    _record_annual_advice_update(governance, "aur", 1902)
+
+    assert _missing_annual_advice_nations(governance, ["aur", "nor"], 1902) == ["nor"]
+    assert _missing_annual_advice_nations(governance, ["aur"], 1902) == []
 
 
 def test_message_validation_enforces_allowed_targets():
@@ -172,7 +197,7 @@ def test_support_is_cut_when_supporter_is_attacked_from_elsewhere():
     defense_conflict = next(
         conflict for conflict in pending_conflicts if conflict["province"] == "aur_cap" and conflict["kind"] == "防守"
     )
-    assert set(defense_conflict.get("participants", [])) == {"奥瑞利亚帝国", "德拉肯高地"}
+    assert set(defense_conflict.get("participants", [])) == {"一排领地", "九排领地"}
 
 
 def test_convoy_chain_allows_army_to_cross_multiple_sea_zones():
@@ -311,15 +336,45 @@ def test_compose_persistent_memory_writes_whitelist_blacklist_and_bias():
     assert "信誉白名单：" in memory
     assert "血仇黑名单：" in memory
     assert "历史偏见：" in memory
-    assert "玛琳诺" in memory
-    assert "德拉肯" in memory
+    assert "二排" in memory
+    assert "九排" in memory
     assert "最近更新：1901 春季·谈判与决策" in memory
 
 
 def test_memory_brief_prioritizes_persistent_memory_over_dynamic_signals():
-    agent = {"memory": "信誉白名单：\n- 玛琳诺：可信。"}
+    agent = {"memory": "信誉白名单：\n- 二排：可信。"}
     trust = {"aur->mar": 80}
     memory_brief = _build_memory_brief(agent, "aur", trust, [], [])
 
     assert memory_brief["persistent_memory"] == agent["memory"]
     assert "primary long-term bias baseline" in memory_brief["memory_priority"]
+
+
+def test_initial_nations_are_named_by_platoon():
+    names = [nation["name"] for nation in NATIONS]
+
+    assert names == [
+        "一排领地",
+        "二排领地",
+        "三排领地",
+        "四排领地",
+        "五排领地",
+        "六排领地",
+        "七排领地",
+        "八排领地",
+        "九排领地",
+        "十排领地",
+    ]
+
+
+def test_two_island_map_has_neutral_central_contested_region():
+    ownership, units, sc_count = initial_board()
+    central_public = {"mt_ashencrest", "dra_cap", "sol_temple", "nor_wood", "nor_cap", "vel_hill", "lighthouse_isle"}
+
+    assert all(PROVINCES[province_id]["sc"] for province_id in central_public)
+    assert all(ownership[province_id] == "" for province_id in central_public)
+    assert sc_count == {nation["id"]: len(HOME_CENTERS[nation["id"]]) for nation in NATIONS}
+    assert len(units) == 30
+    assert PROVINCES["dra_cap"]["type"] == "coast"
+    assert "aur_cap" in PROVINCES["dra_cap"]["adj"]
+    assert "kaz_steppe" in PROVINCES["dra_cap"]["adj"]

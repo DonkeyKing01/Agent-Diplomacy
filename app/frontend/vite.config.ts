@@ -33,6 +33,9 @@ function ensureBuildOutDir() {
     configResolved(config) {
       outDir = path.resolve(config.root, config.build.outDir);
     },
+    buildStart() {
+      fs.mkdirSync(outDir, { recursive: true });
+    },
     writeBundle() {
       fs.mkdirSync(outDir, { recursive: true });
     },

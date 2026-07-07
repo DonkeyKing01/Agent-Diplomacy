@@ -1,13 +1,16 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import JSZip from 'jszip';
 import {
   ArrowLeft,
+  FileArchive,
   Flag,
   Mail,
   Save,
   ScrollText,
   ShieldAlert,
   Undo2,
+  UploadCloud,
   Waypoints,
 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -15,9 +18,7 @@ import { useGame } from '@/game/GameContext';
 import { Nation, phaseAt, unitsOf } from '@/game/engine';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
-import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Slider } from '@/components/ui/slider';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
@@ -44,6 +45,14 @@ const FIELD_HINT: { key: keyof Nation; label: string; description: string; rows:
   { key: 'memory', label: 'Memory', description: '历史持久记忆，只读展示。', rows: 4 },
   { key: 'yearlyAdvice', label: '本年年度建议', description: '当前年或下一年生效的策略补丁。', rows: 3 },
 ];
+
+type MarkdownImportKind = 'systemPrompt' | 'skills' | 'yearlyAdvice';
+
+const IMPORT_LABEL: Record<MarkdownImportKind, string> = {
+  systemPrompt: 'System Prompt',
+  skills: 'Skills.md',
+  yearlyAdvice: '年度建议',
+};
 
 function cloneNation(nation: Nation): Nation {
   return JSON.parse(JSON.stringify(nation)) as Nation;
@@ -75,9 +84,89 @@ function parseMemorySections(memory: string) {
   return { updateLine, sections };
 }
 
+function normalizeImportLabel(value: string) {
+  return value
+    .replace(/\.[^.]+$/, '')
+    .replace(/[_\-—–]+/g, '')
+    .replace(/\s+/g, '')
+    .replace(/领地|国家|智能体|agent|Agent|systemprompt|SystemPrompt|skillsmd|Skillsmd|年度建议/g, '')
+    .toLowerCase();
+}
+
+function matchNationByLabel(label: string, nations: Nation[]) {
+  const normalizedLabel = normalizeImportLabel(label);
+  return nations.find((nation, index) => {
+    const candidates = [
+      nation.id,
+      nation.name,
+      nation.short,
+      nation.name.replace(/领地/g, ''),
+      `${index + 1}排`,
+      `第${index + 1}排`,
+    ];
+    return candidates.some((candidate) => normalizeImportLabel(candidate) === normalizedLabel);
+  });
+}
+
+function parseHeadingBlocks(markdown: string, nations: Nation[]) {
+  const blocks: Record<string, string[]> = {};
+  let currentNationId: string | null = null;
+
+  for (const line of markdown.split(/\r?\n/)) {
+    const heading = line.match(/^#{1,4}\s+(.+?)\s*$/);
+    if (heading) {
+      const nation = matchNationByLabel(heading[1], nations);
+      if (nation) {
+        currentNationId = nation.id;
+        blocks[currentNationId] = [];
+        continue;
+      }
+    }
+    if (currentNationId) {
+      blocks[currentNationId].push(line);
+    }
+  }
+
+  return Object.fromEntries(
+    Object.entries(blocks)
+      .map(([nationId, lines]) => [nationId, lines.join('\n').trim()])
+      .filter(([, content]) => content),
+  ) as Record<string, string>;
+}
+
+async function parseMarkdownZip(file: File, nations: Nation[]) {
+  const zip = await JSZip.loadAsync(file);
+  const mapped: Record<string, string> = {};
+  const unmatchedFiles: string[] = [];
+  const entries = Object.values(zip.files).filter((entry) => !entry.dir && entry.name.toLowerCase().endsWith('.md'));
+
+  for (const entry of entries) {
+    const content = (await entry.async('string')).trim();
+    if (!content) continue;
+
+    const fileBase = entry.name.split('/').pop() || entry.name;
+    const nation = matchNationByLabel(fileBase, nations);
+    if (nation) {
+      mapped[nation.id] = content;
+      continue;
+    }
+
+    const headingBlocks = parseHeadingBlocks(content, nations);
+    if (Object.keys(headingBlocks).length) {
+      Object.assign(mapped, headingBlocks);
+      continue;
+    }
+
+    unmatchedFiles.push(entry.name);
+  }
+
+  return { mapped, unmatchedFiles, markdownCount: entries.length };
+}
+
 const AgentSettingsPanel: React.FC = () => {
-  const { state, ready, settingsSource, focusNation, closeSettings, updateNation } = useGame();
+  const { state, ready, settingsSource, focusNation, closeSettings, updateNation, refresh } = useGame();
   const navigate = useNavigate();
+  const importInputRef = useRef<HTMLInputElement | null>(null);
 
   const inPreparing = ready && state.status === 'preparing';
   const inReview = ready && phaseAt(state.phaseIndex).key === 'review' && state.status !== 'finished';
@@ -86,6 +175,8 @@ const AgentSettingsPanel: React.FC = () => {
   const [selectedId, setSelectedId] = useState<string>(selectedFromState);
   const selected = state.nations.find((nation) => nation.id === selectedId) || state.nations[0];
   const [draft, setDraft] = useState<Nation>(() => cloneNation(selected || state.nations[0]));
+  const [importKind, setImportKind] = useState<MarkdownImportKind>('systemPrompt');
+  const [importing, setImporting] = useState(false);
 
   useEffect(() => {
     if (focusNation && focusNation !== selectedId) {
@@ -103,8 +194,13 @@ const AgentSettingsPanel: React.FC = () => {
   const nationAdviceYears = annualAdviceYears[draft.id] || [];
   const annualAdviceUsedThisYear = nationAdviceYears.includes(state.year);
   const isEliminated = (state.scCount[draft.id] || 0) <= 0;
+  const systemPromptUpdatedNations = state.governance.system_prompt_updated_nations || [];
+  const skillsUpdatedNations = state.governance.skills_updated_nations || [];
+  const systemPromptChanceUsed = systemPromptUpdatedNations.includes(draft.id);
+  const skillsChanceUsed = skillsUpdatedNations.includes(draft.id);
   const canEditAnnualAdvice = inPreparing || inReview;
-  const canEditCore = inPreparing;
+  const canEditSystemPrompt = inPreparing || (inReview && !systemPromptChanceUsed);
+  const canEditSkills = inPreparing || (inReview && !skillsChanceUsed);
   const canSave = !isEliminated && (inPreparing || inReview);
   const memoryView = useMemo(() => parseMemorySections(draft.memory || ''), [draft.memory]);
   const blackbox = state.blackbox[draft.id];
@@ -114,10 +210,10 @@ const AgentSettingsPanel: React.FC = () => {
       return '已灭国：不可再编辑、不可复活';
     }
     if (inPreparing) {
-      return '开局准备中：可修改 System Prompt / Skills / traits / 本年年度建议';
+      return '开局准备中：必须写入 System Prompt / Skills / 本年年度建议';
     }
     if (inReview) {
-      return '年度复盘中：仅可修改一次下一年年度建议';
+      return '年度复盘中：年度建议必写；System Prompt / Skills 各有一次赛后修改机会';
     }
     return '当前阶段仅可查看，治理修改已锁定';
   }, [inPreparing, inReview, isEliminated]);
@@ -145,23 +241,11 @@ const AgentSettingsPanel: React.FC = () => {
 
     const patch: Partial<Nation> = {};
 
-    if (inPreparing) {
+    if (canEditSystemPrompt) {
       if (draft.systemPrompt !== selected.systemPrompt) patch.systemPrompt = draft.systemPrompt;
+    }
+    if (canEditSkills) {
       if (draft.skills !== selected.skills) patch.skills = draft.skills;
-
-      const traitsChanged =
-        draft.traits.expansion !== selected.traits.expansion ||
-        draft.traits.cunning !== selected.traits.cunning ||
-        draft.traits.vengeance !== selected.traits.vengeance;
-
-      if (traitsChanged) {
-        patch.traits = {
-          ...selected.traits,
-          expansion: draft.traits.expansion,
-          cunning: draft.traits.cunning,
-          vengeance: draft.traits.vengeance,
-        };
-      }
     }
 
     if (canEditAnnualAdvice && draft.yearlyAdvice !== selected.yearlyAdvice) {
@@ -192,6 +276,78 @@ const AgentSettingsPanel: React.FC = () => {
       setDraft(cloneNation(selected));
     }
     toast('已放弃本次未保存修改');
+  };
+
+  const canImportKind = (kind: MarkdownImportKind) => {
+    if (kind === 'yearlyAdvice') return canEditAnnualAdvice;
+    return inPreparing || inReview;
+  };
+
+  const handleImportClick = (kind: MarkdownImportKind) => {
+    if (!canImportKind(kind)) {
+      toast.error(`${IMPORT_LABEL[kind]} 当前阶段不可导入`);
+      return;
+    }
+    setImportKind(kind);
+    if (importInputRef.current) {
+      importInputRef.current.value = '';
+      importInputRef.current.click();
+    }
+  };
+
+  const handleImportFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setImporting(true);
+    try {
+      const { mapped, unmatchedFiles, markdownCount } = await parseMarkdownZip(file, state.nations);
+      const entries = Object.entries(mapped).filter(([, content]) => content.trim());
+      if (!markdownCount) {
+        toast.error('ZIP 内没有找到 Markdown 文件');
+        return;
+      }
+      if (!entries.length) {
+        toast.error('未能把 Markdown 映射到任何排', {
+          description: '文件名或标题请使用“一排”“一排领地”等名称。',
+        });
+        return;
+      }
+
+      const failures: string[] = [];
+      for (const [nationId, content] of entries) {
+        try {
+          const patch: Partial<Nation> =
+            importKind === 'systemPrompt'
+              ? { systemPrompt: content }
+              : importKind === 'skills'
+                ? { skills: content }
+                : { yearlyAdvice: content };
+          await updateNation(nationId, patch);
+        } catch (error) {
+          const nation = state.nations.find((item) => item.id === nationId);
+          failures.push(`${nation?.name || nationId}：${(error as Error).message || '写入失败'}`);
+        }
+      }
+      await refresh();
+
+      if (failures.length) {
+        toast.error(`${IMPORT_LABEL[importKind]} 部分导入失败`, {
+          description: failures.slice(0, 3).join('；'),
+        });
+        return;
+      }
+
+      toast.success(`已导入 ${entries.length} 个排的 ${IMPORT_LABEL[importKind]}`, {
+        description: unmatchedFiles.length ? `有 ${unmatchedFiles.length} 个 Markdown 未匹配到排，已跳过。` : '内容已通过后端接口写入。',
+      });
+    } catch (error) {
+      toast.error('ZIP 导入失败', {
+        description: (error as Error).message || '请确认上传的是有效 zip。',
+      });
+    } finally {
+      setImporting(false);
+      event.target.value = '';
+    }
   };
 
   const backLabel = settingsSource ? RETURN_LABEL[settingsSource] : '返回游戏';
@@ -267,13 +423,40 @@ const AgentSettingsPanel: React.FC = () => {
             </section>
 
             <section className="space-y-4 rounded-lg border border-border bg-card p-5">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h3 className="font-display text-lg font-semibold">Markdown ZIP 批量导入</h3>
+                  <div className="mt-1 text-sm text-muted-foreground">
+                    支持按文件名或 Markdown 标题匹配每个排，导入会调用后端接口并写入真实智能体设置。
+                  </div>
+                </div>
+                <FileArchive className="h-5 w-5 text-primary" />
+              </div>
+              <input ref={importInputRef} type="file" accept=".zip,application/zip" className="hidden" onChange={handleImportFile} />
+              <div className="flex flex-wrap gap-3">
+                {(['systemPrompt', 'skills', 'yearlyAdvice'] as MarkdownImportKind[]).map((kind) => (
+                  <Button
+                    key={kind}
+                    variant={kind === 'yearlyAdvice' ? 'default' : 'outline'}
+                    className={kind === 'yearlyAdvice' ? '' : 'bg-transparent hover:bg-secondary'}
+                    onClick={() => handleImportClick(kind)}
+                    disabled={importing || !canImportKind(kind)}
+                  >
+                    <UploadCloud className="mr-1.5 h-4 w-4" />
+                    {importing && importKind === kind ? '导入中' : `导入 ${IMPORT_LABEL[kind]} ZIP`}
+                  </Button>
+                ))}
+              </div>
+            </section>
+
+            <section className="space-y-4 rounded-lg border border-border bg-card p-5">
               <h3 className="font-display text-lg font-semibold">Agent 核心设置</h3>
               <div className="grid gap-2 rounded-md border border-border/70 bg-secondary/20 p-3 text-sm text-muted-foreground">
-                <div>System Prompt 剩余修改次数：{Math.max(0, 1 - state.governance.system_prompt_edits_used)} / 1</div>
-                <div>Skills.md 剩余修改次数：{Math.max(0, 3 - state.governance.skills_edits_used)} / 3</div>
-                <div>System Prompt 与 Skills.md 仅可在 preparing 阶段设定，后续年份不可再改。</div>
+                <div>本排 System Prompt 赛后修改机会：{systemPromptChanceUsed ? '已使用' : '未使用'} / 1</div>
+                <div>本排 Skills.md 赛后修改机会：{skillsChanceUsed ? '已使用' : '未使用'} / 1</div>
+                <div>System Prompt 与 Skills.md 开局准备阶段必须写入；开局后每个排各只有一次修改机会。</div>
                 <div>System Prompt / Skills.md / 年度建议 均不再限制文本长度。</div>
-                <div>本年年度建议默认沿用上一年版本，除非你手动改写。</div>
+                <div>年度复盘阶段必须为所有未灭国排写入年度建议，否则无法推进到下一年。</div>
                 <div>本年年度建议：{annualAdviceUsedThisYear ? '本年额度已使用' : '本年还可修改 1 次'}</div>
                 <div>Memory 为锁定历史层，只读展示，不可手动编辑。</div>
                 {isEliminated ? <div>该国已灭国：不会再参与推理、行动或冬季复活。</div> : null}
@@ -285,7 +468,11 @@ const AgentSettingsPanel: React.FC = () => {
                     ? true
                     : field.key === 'yearlyAdvice'
                       ? !canEditAnnualAdvice
-                      : !canEditCore;
+                      : field.key === 'systemPrompt'
+                        ? !canEditSystemPrompt
+                        : field.key === 'skills'
+                          ? !canEditSkills
+                          : true;
 
                 return (
                   <div key={field.key} className="space-y-1.5">
@@ -338,37 +525,6 @@ const AgentSettingsPanel: React.FC = () => {
                   </div>
                 );
               })}
-            </section>
-
-            <section className="space-y-5 rounded-lg border border-border bg-card p-5">
-              <h3 className="font-display text-lg font-semibold">国家性格参数</h3>
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <TextTrait label="国家气质" value={draft.traits.temperament} disabled onChange={() => {}} />
-                <TextTrait label="风险偏好" value={draft.traits.risk} disabled onChange={() => {}} />
-                <TextTrait label="荣誉观" value={draft.traits.honor} disabled onChange={() => {}} />
-                <TextTrait label="外交风格" value={draft.traits.diplomacy} disabled onChange={() => {}} />
-              </div>
-              <div className="rounded-md border border-border/70 bg-secondary/20 p-3 text-sm text-muted-foreground">
-                上面 4 个文本标签会根据下方真实人格数值自动推导并参与展示；真正进入后端决策的是下方 3 个数值参数。
-              </div>
-              <SliderTrait
-                label="记仇指数"
-                value={draft.traits.vengeance}
-                disabled={!canEditCore}
-                onChange={(value) => setDraft({ ...draft, traits: { ...draft.traits, vengeance: value } })}
-              />
-              <SliderTrait
-                label="扩张倾向"
-                value={draft.traits.expansion}
-                disabled={!canEditCore}
-                onChange={(value) => setDraft({ ...draft, traits: { ...draft.traits, expansion: value } })}
-              />
-              <SliderTrait
-                label="诡谋程度"
-                value={draft.traits.cunning}
-                disabled={!canEditCore}
-                onChange={(value) => setDraft({ ...draft, traits: { ...draft.traits, cunning: value } })}
-              />
             </section>
 
             {blackbox ? (
@@ -587,33 +743,6 @@ const AgentSettingsPanel: React.FC = () => {
     </div>
   );
 };
-
-const TextTrait: React.FC<{ label: string; value: string; onChange: (value: string) => void; disabled?: boolean }> = ({
-  label,
-  value,
-  onChange,
-  disabled,
-}) => (
-  <div className="space-y-1.5">
-    <Label>{label}</Label>
-    <Input value={value} onChange={(event) => onChange(event.target.value)} disabled={disabled} />
-  </div>
-);
-
-const SliderTrait: React.FC<{ label: string; value: number; onChange: (value: number) => void; disabled?: boolean }> = ({
-  label,
-  value,
-  onChange,
-  disabled,
-}) => (
-  <div className="space-y-2">
-    <div className="flex items-center justify-between">
-      <Label>{label}</Label>
-      <span className="tabular text-sm text-primary">{value}</span>
-    </div>
-    <Slider value={[value]} min={0} max={100} step={1} onValueChange={(values) => onChange(values[0])} disabled={disabled} />
-  </div>
-);
 
 const BlackboxSubTitle: React.FC<{ title: string }> = ({ title }) => (
   <div className="text-xs uppercase tracking-[0.16em] text-primary">{title}</div>

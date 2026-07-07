@@ -594,9 +594,6 @@ function buildNationSection(
           <ul>
             <li>领地数：${data.territories.length}</li>
             <li>单位数：${data.units.length}</li>
-            <li>记仇值：${nation.traits.vengeance}</li>
-            <li>扩张值：${nation.traits.expansion}</li>
-            <li>诡谋值：${nation.traits.cunning}</li>
           </ul>
         </div>
         <div class="card">
@@ -979,8 +976,8 @@ const DataPage: React.FC = () => {
       `${data.nation.name} - ${selectedLabel}`,
       `
         <section class="hero">
-          <h1>${escapeHtml(data.nation.name)} 国家档案导出</h1>
-          <p>导出时间对应阶段：${escapeHtml(selectedLabel)}。以下地图、战报、外交往来均按当前筛选阶段生成；智能体档案展示的是当前数据库中保留的持久版本。</p>
+          <h1>${escapeHtml(data.nation.name)} 档案导出</h1>
+          <p>导出时间对应阶段：${escapeHtml(selectedLabel)}。地图、密信、军事行动、交战记录均来自当前后端状态；智能体档案展示的是数据库中保留的持久版本。</p>
         </section>
         ${buildNationSection(data, selectedPhase!, snapshotState, state.nations)}
         <div class="note">说明：历史阶段的地图、单位、SC 取自阶段快照；System Prompt / Skills / Memory / 年度建议取自当前数据库持久档案。</div>
@@ -989,17 +986,30 @@ const DataPage: React.FC = () => {
 
   const buildBatchPage = () =>
     buildHtmlDocument(
-      `全国家批量导出 - ${selectedLabel}`,
+      `十排总览导出 - ${selectedLabel}`,
       `
         <section class="hero">
-          <h1>全国家批量导出</h1>
-          <p>筛选阶段：${escapeHtml(selectedLabel)}。本页面汇总全部国家在该阶段的地图数据、外交消息、战斗结果与当前智能体持久档案。</p>
+          <h1>十排总览导出</h1>
+          <p>筛选阶段：${escapeHtml(selectedLabel)}。本页面汇总十个排在该阶段的地图数据、外交消息、战斗结果与当前智能体持久档案。</p>
         </section>
         ${nationExports
           .map((item) => buildNationSection(item, selectedPhase!, snapshotState, state.nations))
           .join('')}
       `,
     );
+
+  const handleDownloadAllNationPages = () => {
+    nationExports.forEach((item, index) => {
+      window.setTimeout(() => {
+        downloadText(
+          buildNationPage(item),
+          `agent-diplomacy-${item.nation.short}-${selectedLabel.replace(/\s+/g, '-')}.html`,
+          'text/html;charset=utf-8',
+        );
+      }, index * 140);
+    });
+    toast.success(`已开始下载 ${nationExports.length} 个排的独立 HTML`);
+  };
 
   return (
     <AppShell>
@@ -1011,10 +1021,10 @@ const DataPage: React.FC = () => {
               历史数据导出
             </h2>
             <p className="mb-4 text-sm text-muted-foreground">
-              可以按年份与阶段筛选国家数据，默认展示最新阶段。支持单独下载某个国家的 HTML 页面，也支持下载汇总全部国家的批量 HTML 页面。
+              可以按年份与阶段筛选十个排的数据，默认展示最新阶段。支持单独下载某个排的 HTML，也支持一键下载十个排的独立 HTML 或总览 HTML。
             </p>
 
-            <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto_auto]">
+            <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto_auto_auto_auto]">
               <div>
                 <div className="mb-2 text-sm text-muted-foreground">筛选阶段</div>
                 <Select value={selectedPhaseId} onValueChange={setSelectedPhaseId}>
@@ -1035,6 +1045,15 @@ const DataPage: React.FC = () => {
               <Button
                 variant="outline"
                 className="bg-transparent hover:bg-secondary"
+                onClick={handleDownloadAllNationPages}
+              >
+                <Download className="mr-1.5 h-4 w-4" />
+                一键下载十个排 HTML
+              </Button>
+
+              <Button
+                variant="outline"
+                className="bg-transparent hover:bg-secondary"
                 onClick={() => {
                   downloadText(
                     buildBatchPage(),
@@ -1045,7 +1064,7 @@ const DataPage: React.FC = () => {
                 }}
               >
                 <Package className="mr-1.5 h-4 w-4" />
-                下载批量 HTML
+                下载总览 HTML
               </Button>
 
               <Button variant="outline" className="bg-transparent hover:bg-secondary" onClick={handleRawJsonExport}>
@@ -1058,7 +1077,7 @@ const DataPage: React.FC = () => {
           <section className="rounded-lg border border-border bg-card p-6">
             <h2 className="mb-4 flex items-center gap-2 font-display text-lg font-semibold">
               <FileText className="h-5 w-5 text-primary" />
-              国家导出列表
+              十排导出列表
             </h2>
             <ScrollArea className="h-[50vh] min-h-[420px] rounded-md border border-border/70 bg-background/30 pr-4">
               <div className="space-y-4 p-3">
@@ -1086,7 +1105,7 @@ const DataPage: React.FC = () => {
                         }}
                       >
                         <Download className="mr-1.5 h-4 w-4" />
-                        下载该国 HTML
+                        下载该排 HTML
                       </Button>
                     </div>
 

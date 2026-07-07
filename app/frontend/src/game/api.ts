@@ -11,9 +11,6 @@ export interface BackendAgent {
   skills_md: string;
   memory: string;
   annual_advice: string;
-  aggression: number;
-  loyalty: number;
-  cunning: number;
 }
 
 export interface BackendUnit {
@@ -187,6 +184,8 @@ export interface BackendState {
   governance?: {
     system_prompt_edits_used: number;
     skills_edits_used: number;
+    system_prompt_updated_nations?: string[];
+    skills_updated_nations?: string[];
     annual_advice_updated_years: number[];
     annual_advice_updated_years_by_nation?: Record<string, number[]>;
     annual_advice_effective_years?: Record<string, number>;
@@ -283,9 +282,6 @@ export async function updateAgent(payload: {
   skills_md?: string;
   memory?: string;
   annual_advice?: string;
-  aggression?: number;
-  loyalty?: number;
-  cunning?: number;
 }): Promise<{ ok: boolean; agent: BackendAgent }> {
   return invoke('/agent', 'POST', { session_key: SESSION_KEY, ...payload });
 }

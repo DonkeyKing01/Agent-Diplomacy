@@ -76,9 +76,6 @@ class AgentUpdateRequest(BaseModel):
     skills_md: Optional[str] = None
     memory: Optional[str] = None
     annual_advice: Optional[str] = None
-    aggression: Optional[int] = None
-    loyalty: Optional[int] = None
-    cunning: Optional[int] = None
 
 
 class ScAdjustItem(BaseModel):
@@ -100,9 +97,6 @@ def _agent_to_dict(agent: Any) -> Dict[str, Any]:
         "skills_md": agent.skills_md or "",
         "memory": agent.memory or "",
         "annual_advice": agent.annual_advice or "",
-        "aggression": agent.aggression if agent.aggression is not None else 50,
-        "loyalty": agent.loyalty if agent.loyalty is not None else 50,
-        "cunning": agent.cunning if agent.cunning is not None else 50,
     }
 
 
@@ -130,6 +124,8 @@ def _default_governance_state() -> Dict[str, Any]:
     return {
         "system_prompt_edits_used": 0,
         "skills_edits_used": 0,
+        "system_prompt_updated_nations": [],
+        "skills_updated_nations": [],
         "annual_advice_updated_years": [],
         "annual_advice_updated_years_by_nation": {},
         "annual_advice_effective_years": {},
@@ -151,6 +147,13 @@ def _normalize_governance_state(governance: Optional[Dict[str, Any]]) -> Dict[st
         merged.update(governance)
     if not isinstance(merged.get("annual_advice_updated_years"), list):
         merged["annual_advice_updated_years"] = []
+    for field in ("system_prompt_updated_nations", "skills_updated_nations"):
+        if not isinstance(merged.get(field), list):
+            merged[field] = []
+        else:
+            merged[field] = sorted({str(nation_id) for nation_id in merged[field]})
+    merged["system_prompt_edits_used"] = len(merged["system_prompt_updated_nations"])
+    merged["skills_edits_used"] = len(merged["skills_updated_nations"])
     if not isinstance(merged.get("annual_advice_updated_years_by_nation"), dict):
         merged["annual_advice_updated_years_by_nation"] = {}
     else:
@@ -278,6 +281,23 @@ def _annual_advice_years_for_nation(governance: Dict[str, Any], nation_id: str) 
     return []
 
 
+def _governance_nation_edits(governance: Dict[str, Any], field: str) -> set[str]:
+    value = governance.get(field)
+    if not isinstance(value, list):
+        return set()
+    return {str(nation_id) for nation_id in value}
+
+
+def _record_governance_nation_edit(governance: Dict[str, Any], field: str, nation_id: str) -> None:
+    edits = _governance_nation_edits(governance, field)
+    edits.add(nation_id)
+    governance[field] = sorted(edits)
+    if field == "system_prompt_updated_nations":
+        governance["system_prompt_edits_used"] = len(edits)
+    elif field == "skills_updated_nations":
+        governance["skills_edits_used"] = len(edits)
+
+
 def _record_annual_advice_update(governance: Dict[str, Any], nation_id: str, year: int) -> None:
     years_by_nation = governance.get("annual_advice_updated_years_by_nation", {})
     nation_years = set(_annual_advice_years_for_nation(governance, nation_id))
@@ -292,6 +312,21 @@ def _record_annual_advice_update(governance: Dict[str, Any], nation_id: str, yea
         for item_year in item_years
     }
     governance["annual_advice_updated_years"] = sorted(aggregate_years)
+
+
+def _missing_annual_advice_nations(governance: Dict[str, Any], active_nations: List[str], year: int) -> List[str]:
+    return [
+        nation_id
+        for nation_id in active_nations
+        if int(year) not in set(_annual_advice_years_for_nation(governance, nation_id))
+    ]
+
+
+def _require_non_empty_profile_text(label: str, value: str) -> str:
+    text = (value or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail=f"{label} cannot be empty.")
+    return value
 
 
 def _session_state(session: Any) -> Dict[str, Any]:
@@ -1703,11 +1738,6 @@ async def _llm_negotiate(
         "task": "negotiation_round",
         "nation_id": nation_id,
         "nation_name": agent["nation_name"],
-        "personality": {
-            "aggression": agent["aggression"],
-            "loyalty": agent["loyalty"],
-            "cunning": agent["cunning"],
-        },
         "system_prompt": agent["system_prompt"] or "",
         "skills_md": agent["skills_md"] or "",
         "memory_brief": _build_memory_brief(agent, nation_id, trust, previous_messages, reports),
@@ -2039,11 +2069,6 @@ async def _llm_decide_with_context(
     user_payload = {
         "nation_id": nation_id,
         "nation_name": agent["nation_name"],
-        "personality": {
-            "aggression": agent["aggression"],
-            "loyalty": agent["loyalty"],
-            "cunning": agent["cunning"],
-        },
         "system_prompt": agent["system_prompt"] or "",
         "skills_md": agent["skills_md"] or "",
         "memory_brief": _build_memory_brief(agent, nation_id, trust, previous_messages, reports),
@@ -2298,11 +2323,6 @@ async def _llm_winter_decide(
         "task": "winter_adjustment",
         "nation_id": nation_id,
         "nation_name": agent["nation_name"],
-        "personality": {
-            "aggression": agent["aggression"],
-            "loyalty": agent["loyalty"],
-            "cunning": agent["cunning"],
-        },
         "system_prompt": agent["system_prompt"] or "",
         "skills_md": agent["skills_md"] or "",
         "memory_brief": _build_memory_brief(agent, nation_id, trust, previous_messages, reports),
@@ -2351,11 +2371,6 @@ async def _llm_retreat_decide(
         "task": "retreat_phase",
         "nation_id": nation_id,
         "nation_name": agent["nation_name"],
-        "personality": {
-            "aggression": agent["aggression"],
-            "loyalty": agent["loyalty"],
-            "cunning": agent["cunning"],
-        },
         "system_prompt": agent["system_prompt"] or "",
         "skills_md": agent["skills_md"] or "",
         "memory_brief": _build_memory_brief(agent, nation_id, trust, previous_messages, reports),
@@ -2503,6 +2518,20 @@ async def start_prepared_game(data: StartPreparedGameRequest, db: AsyncSession =
         raise HTTPException(status_code=404, detail="Game session not initialized.")
 
     if session.status == "preparing":
+        agents = await _load_agents(db, session_key)
+        incomplete = [
+            nation_name(nation_id)
+            for nation_id in NATION_IDS
+            if not (agents.get(nation_id, {}).get("system_prompt") or "").strip()
+            or not (agents.get(nation_id, {}).get("skills_md") or "").strip()
+            or not (agents.get(nation_id, {}).get("annual_advice") or "").strip()
+        ]
+        if incomplete:
+            raise HTTPException(
+                status_code=400,
+                detail="开局前必须为所有未灭国排写入 System Prompt、Skills.md 与年度建议。缺失："
+                + "、".join(incomplete),
+            )
         await session_service.update(session.id, {"status": "running"})
         session = await _load_session(db, session_key)
 
@@ -2645,6 +2674,15 @@ async def advance_phase(data: AdvanceRequest, db: AsyncSession = Depends(get_db)
     pending_retreats = state.get("pendingRetreats", [])
     governance = _normalize_governance_state(state.get("governance"))
     eliminated_nations = _eliminated_nations(governance)
+    if phase["key"] == "review":
+        active_nations_for_review = [nation_id for nation_id in NATION_IDS if nation_id not in eliminated_nations]
+        missing_advice = _missing_annual_advice_nations(governance, active_nations_for_review, year)
+        if missing_advice:
+            raise HTTPException(
+                status_code=400,
+                detail="年度复盘推进前必须为所有未灭国排写入年度建议。缺失："
+                + "、".join(nation_name(nation_id) for nation_id in missing_advice),
+            )
     append_game_log(
         session_key,
         "phase_advance_started",
@@ -3052,8 +3090,8 @@ async def update_agent(data: AgentUpdateRequest, db: AsyncSession = Depends(get_
         raise HTTPException(status_code=400, detail="This nation has been eliminated and can no longer be edited or revived.")
 
     update: Dict[str, Any] = {}
-    editable_in_preparing = {"system_prompt", "skills_md", "annual_advice", "aggression", "loyalty", "cunning"}
-    editable_in_review = {"annual_advice"}
+    editable_in_preparing = {"system_prompt", "skills_md", "annual_advice"}
+    editable_in_review = {"system_prompt", "skills_md", "annual_advice"}
     requested_fields = {
         field
         for field in editable_in_preparing | editable_in_review | {"memory"}
@@ -3070,7 +3108,7 @@ async def update_agent(data: AgentUpdateRequest, db: AsyncSession = Depends(get_
             if forbidden_fields:
                 raise HTTPException(
                     status_code=400,
-                    detail="Only yearly advice can be changed during the annual review phase.",
+                    detail="Only System Prompt, Skills.md, and yearly advice can be changed during the annual review phase.",
                 )
         else:
             raise HTTPException(
@@ -3082,22 +3120,31 @@ async def update_agent(data: AgentUpdateRequest, db: AsyncSession = Depends(get_
         raise HTTPException(status_code=400, detail="Memory is locked by design and cannot be directly edited.")
 
     if data.system_prompt is not None and data.system_prompt != (target.system_prompt or ""):
+        _require_non_empty_profile_text("System Prompt", data.system_prompt)
         if session.status != "preparing":
-            raise HTTPException(status_code=400, detail="System Prompt can only be set during the preparation stage.")
-        if governance.get("system_prompt_edits_used", 0) >= 1:
-            raise HTTPException(status_code=400, detail="System Prompt can only be revised once in the whole match.")
+            used_nations = _governance_nation_edits(governance, "system_prompt_updated_nations")
+            if data.nation_id in used_nations:
+                raise HTTPException(
+                    status_code=400,
+                    detail="System Prompt can only be revised once per nation after opening.",
+                )
+            _record_governance_nation_edit(governance, "system_prompt_updated_nations", data.nation_id)
         update["system_prompt"] = data.system_prompt
-        governance["system_prompt_edits_used"] = governance.get("system_prompt_edits_used", 0) + 1
 
     if data.skills_md is not None and data.skills_md != (target.skills_md or ""):
+        _require_non_empty_profile_text("Skills.md", data.skills_md)
         if session.status != "preparing":
-            raise HTTPException(status_code=400, detail="Skills.md can only be changed during the preparation stage.")
-        if governance.get("skills_edits_used", 0) >= 3:
-            raise HTTPException(status_code=400, detail="Skills.md can only be revised three times in the whole match.")
+            used_nations = _governance_nation_edits(governance, "skills_updated_nations")
+            if data.nation_id in used_nations:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Skills.md can only be revised once per nation after opening.",
+                )
+            _record_governance_nation_edit(governance, "skills_updated_nations", data.nation_id)
         update["skills_md"] = data.skills_md
-        governance["skills_edits_used"] = governance.get("skills_edits_used", 0) + 1
 
     if data.annual_advice is not None and data.annual_advice != (target.annual_advice or ""):
+        _require_non_empty_profile_text("Yearly advice", data.annual_advice)
         used_years = set(_annual_advice_years_for_nation(governance, data.nation_id))
         if session.year in used_years:
             if session.status == "preparing":
@@ -3114,16 +3161,6 @@ async def update_agent(data: AgentUpdateRequest, db: AsyncSession = Depends(get_
         effective_years = governance.get("annual_advice_effective_years", {})
         effective_years[data.nation_id] = session.year if session.status == "preparing" else session.year + 1
         governance["annual_advice_effective_years"] = effective_years
-
-    for field in ("aggression", "loyalty", "cunning"):
-        value = getattr(data, field)
-        if value is not None:
-            if session.status != "preparing":
-                raise HTTPException(
-                    status_code=400,
-                    detail="Agent traits can only be changed during the preparation stage.",
-                )
-            update[field] = value
     if not update:
         raise HTTPException(status_code=400, detail="No fields provided for update.")
 
@@ -3169,4 +3206,3 @@ async def adjust_sc(data: ScAdjustRequest, db: AsyncSession = Depends(get_db)):
         },
     )
     return {"ok": True, "sc": sc_count}
-

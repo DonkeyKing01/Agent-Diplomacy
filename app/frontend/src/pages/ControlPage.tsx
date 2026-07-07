@@ -177,8 +177,8 @@ const ControlPage: React.FC = () => {
             <h3 className="mb-4 font-display text-lg font-semibold">年度治理循环</h3>
             <div className="mb-4 rounded-md border border-border/70 bg-secondary/20 p-3 text-sm text-muted-foreground">
               {!ready && '先初始化对局，然后进入开局准备阶段。'}
-              {ready && state.status === 'preparing' && '准备阶段可以调整 System Prompt、Skills、Traits 与本年年度建议。'}
-              {ready && state.status !== 'preparing' && '准备结束后，系统将按年度阶段推进；年终复盘仅保留一次年度建议治理。'}
+              {ready && state.status === 'preparing' && '准备阶段必须写入 System Prompt、Skills 与本年年度建议。'}
+              {ready && state.status !== 'preparing' && '准备结束后，System Prompt / Skills 每排各有一次修改机会；年终复盘必须写入年度建议。'}
             </div>
 
             {ready && state.status === 'preparing' ? (
