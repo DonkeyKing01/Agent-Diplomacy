@@ -1,6 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import {
   GameState,
+  HistoricalPhaseSnapshot,
   Nation,
   NATIONS,
   PHASES,
@@ -15,6 +16,8 @@ import {
   adjustSc as apiAdjustSc,
   fetchState,
   initGame,
+  startPreparedGame as apiStartPreparedGame,
+  updateMatchConfig as apiUpdateMatchConfig,
   updateAgent as apiUpdateAgent,
 } from './api';
 
@@ -31,10 +34,11 @@ function deriveTraits(
   return {
     ...base,
     expansion: aggression,
+    cunning,
     vengeance: Math.max(0, Math.min(100, 100 - loyalty + Math.round(cunning / 4))),
-    diplomacy: cunning > 65 ? 'manipulative' : cunning > 45 ? 'probing' : 'calm',
-    risk: aggression > 75 ? 'high-risk' : aggression > 50 ? 'opportunistic' : 'steady',
-    honor: loyalty > 70 ? 'strict' : loyalty > 45 ? 'conditional' : 'flexible',
+    diplomacy: cunning > 65 ? '操控性强' : cunning > 45 ? '暧昧试探' : '冷静理智',
+    risk: aggression > 75 ? '豪赌型' : aggression > 50 ? '机会主义' : '稳健运营',
+    honor: loyalty > 70 ? '守信' : loyalty > 45 ? '灵活务实' : '纯粹务实',
   };
 }
 
@@ -78,19 +82,48 @@ function mapBackendToGameState(backendState: BackendState): GameState {
     tone: 'neutral' as const,
   }));
 
+  const phaseSnapshots: HistoricalPhaseSnapshot[] = (backendState.phaseSnapshots || []).map((snapshot) => {
+    const snapshotOwnership: Record<string, string | null> = {};
+    Object.entries(snapshot.ownership || {}).forEach(([provinceId, owner]) => {
+      snapshotOwnership[provinceId] = owner || null;
+    });
+
+    Object.keys(PROVINCE_MAP).forEach((provinceId) => {
+      if (!(provinceId in snapshotOwnership)) {
+        snapshotOwnership[provinceId] = null;
+      }
+    });
+
+    return {
+      reportId: `r${snapshot.report_id ?? `${snapshot.year}-${snapshot.phase_index}`}`,
+      year: snapshot.year,
+      phaseIndex: snapshot.phase_index,
+      phaseKey: snapshot.phase_key,
+      phaseLabel: snapshot.phaseLabel,
+      ownership: snapshotOwnership,
+      units: (snapshot.units || []).map((unit, index) => ({
+        id: `hs-${snapshot.report_id ?? snapshot.phase_index}-${index}`,
+        owner: unit.owner,
+        type: unit.type,
+        location: unit.location,
+      })),
+      scCount: snapshot.scCount || {},
+    };
+  });
+
   const messages = (backendState.messages || []).map((message) => {
     const fromNation = NATION_META[message.from];
     const toNation = message.to === 'public' ? null : NATION_META[message.to];
     const intentMap: Record<string, GameState['messages'][number]['intent']> = {
       alliance: '结盟',
-      threat: '恫吓',
+      threat: '恐吓',
       betray: '背叛',
       probe: '试探',
       peace: '求和',
       coordination: '协同',
       结盟: '结盟',
       试探: '试探',
-      恫吓: '恫吓',
+      恐吓: '恐吓',
       背叛: '背叛',
       求和: '求和',
       协同: '协同',
@@ -119,6 +152,119 @@ function mapBackendToGameState(backendState: BackendState): GameState {
     scSnapshot: item.scSnapshot || {},
   }));
 
+  const blackbox = Object.fromEntries(
+    Object.entries(backendState.blackbox || {}).map(([nationId, nationBlackbox]) => [
+      nationId,
+      {
+        diplomaticArchive: {
+          sent: (nationBlackbox.diplomatic_archive?.sent || []).map((item) => ({
+            year: item.year,
+            phase: item.phase,
+            from: item.from,
+            fromName: item.from_name,
+            to: item.to,
+            toName: item.to_name,
+            content: item.content,
+            commitments: item.commitments,
+            toneScore: item.tone_score,
+          })),
+          received: (nationBlackbox.diplomatic_archive?.received || []).map((item) => ({
+            year: item.year,
+            phase: item.phase,
+            from: item.from,
+            fromName: item.from_name,
+            to: item.to,
+            toName: item.to_name,
+            content: item.content,
+            commitments: item.commitments,
+            toneScore: item.tone_score,
+          })),
+          publicStatements: (nationBlackbox.diplomatic_archive?.public_statements || []).map((item) => ({
+            year: item.year,
+            phase: item.phase,
+            from: item.from,
+            fromName: item.from_name,
+            to: item.to,
+            toName: item.to_name,
+            content: item.content,
+            commitments: item.commitments,
+            toneScore: item.tone_score,
+          })),
+          suspectedAgreements: nationBlackbox.diplomatic_archive?.suspected_agreements || [],
+          betrayalEvidence: (nationBlackbox.diplomatic_archive?.betrayal_evidence || []).map((item) => ({
+            year: item.year,
+            phase: item.phase,
+            direction: item.direction,
+            actor: item.actor,
+            actorName: item.actor_name,
+            target: item.target,
+            targetName: item.target_name,
+            province: item.province,
+            provinceName: item.province_name,
+          })),
+        },
+        alignmentReport: {
+          betrayedUs: nationBlackbox.alignment_report?.betrayed_us || [],
+          weBetrayed: nationBlackbox.alignment_report?.we_betrayed || [],
+          trustScores: (nationBlackbox.alignment_report?.trust_scores || []).map((row) => ({
+            nationId: row.nation_id,
+            nationName: row.nation_name,
+            trustScore: row.trust_score,
+            softAllianceLevel: row.soft_alliance_level,
+            commitments: row.commitments,
+            militaryCooperation: row.military_cooperation,
+            betrayalsAgainstUs: row.betrayals_against_us,
+            recentNegative: row.recent_negative,
+            recentPositive: row.recent_positive,
+            outboundBetrayals: row.outbound_betrayals,
+            lastTouch: row.last_touch || null,
+          })),
+          memoryWhitelist: nationBlackbox.alignment_report?.memory_whitelist || [],
+          memoryBlacklist: nationBlackbox.alignment_report?.memory_blacklist || [],
+        },
+        decisionReplay: {
+          cotAvailable: nationBlackbox.decision_replay?.cot_available ?? false,
+          note: nationBlackbox.decision_replay?.note || '',
+          entries: (nationBlackbox.decision_replay?.entries || []).map((entry) => ({
+            timestamp: entry.timestamp,
+            phaseLabel: entry.phase_label,
+            kind: entry.kind,
+            summary: entry.summary,
+            orderSummaries: entry.order_summaries || [],
+            messages: (entry.messages || []).map((message) => ({
+              fromNation: message.from_nation,
+              toNation: message.to_nation,
+              content: message.content,
+            })),
+            conflicts: (entry.conflicts || []).map((conflict) => ({
+              province: conflict.province,
+              provinceName: conflict.province_name,
+              kind: conflict.kind,
+              winner: conflict.winner,
+              winnerName: conflict.winner_name,
+              participants: conflict.participants,
+              participantNames: conflict.participant_names,
+            })),
+            logs: entry.logs || [],
+            decision: entry.decision || undefined,
+            reasoningTrace: {
+              headline: entry.reasoning_trace?.headline || '',
+              goal: entry.reasoning_trace?.goal || '',
+              boardRead: entry.reasoning_trace?.board_read || '',
+              diplomaticRead: entry.reasoning_trace?.diplomatic_read || '',
+              risks: entry.reasoning_trace?.risks || [],
+              decisionLogic: entry.reasoning_trace?.decision_logic || '',
+            },
+          })),
+        },
+        memorySnapshot: {
+          persistentMemory: nationBlackbox.memory_snapshot?.persistent_memory || '',
+          recentPublicOutcomes: nationBlackbox.memory_snapshot?.recent_public_outcomes || [],
+        },
+      },
+    ]),
+  );
+
   const scCount =
     backendState.scCount && Object.keys(backendState.scCount).length
       ? backendState.scCount
@@ -130,7 +276,9 @@ function mapBackendToGameState(backendState: BackendState): GameState {
   });
 
   const status: GameState['status'] =
-    backendState.status === 'finished'
+    backendState.status === 'preparing'
+      ? 'preparing'
+      : backendState.status === 'finished'
       ? 'finished'
       : backendState.phase_key === 'review'
         ? 'awaiting'
@@ -148,14 +296,19 @@ function mapBackendToGameState(backendState: BackendState): GameState {
     conflicts: [],
     messages,
     reports,
+    phaseSnapshots,
     history,
-    governance: backendState.governance || {
-      system_prompt_edits_used: 0,
-      skills_edits_used: 0,
-      annual_advice_updated_years: [],
+    governance: {
+      system_prompt_edits_used: backendState.governance?.system_prompt_edits_used ?? 0,
+      skills_edits_used: backendState.governance?.skills_edits_used ?? 0,
+      annual_advice_updated_years: backendState.governance?.annual_advice_updated_years || [],
+      annual_advice_updated_years_by_nation: backendState.governance?.annual_advice_updated_years_by_nation || {},
+      annual_advice_effective_years: backendState.governance?.annual_advice_effective_years || {},
+      maxYear: backendState.governance?.max_year ?? 1910,
     },
     endowment,
     nations,
+    blackbox,
     seed: 20260704,
   };
 }
@@ -167,10 +320,12 @@ interface GameContextValue {
   engine: 'llm' | 'fallback';
   error: string | null;
   startGameAction: () => Promise<boolean>;
+  finishPreparationAction: () => Promise<boolean>;
   advance: () => Promise<boolean>;
   reset: () => Promise<boolean>;
   refresh: () => Promise<void>;
   setEndowment: (nationId: string, value: number) => Promise<void>;
+  updateMatchConfig: (patch: { maxYear?: number }) => Promise<void>;
   updateNation: (nationId: string, patch: Partial<Nation>) => Promise<void>;
   settingsOpen: boolean;
   settingsSource: SettingsSource;
@@ -229,6 +384,29 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setBusy(false);
     }
   }, [applyBackend]);
+
+  const finishPreparationAction = useCallback(async () => {
+    if (state.status !== 'preparing') {
+      return false;
+    }
+
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await apiStartPreparedGame();
+      if (result.state) {
+        applyBackend(result.state);
+      }
+      return true;
+    } catch (error) {
+      const message = (error as { message?: string })?.message || 'Failed to finish preparation';
+      setError(message);
+      await refresh();
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }, [state.status, applyBackend, refresh]);
 
   const advance = useCallback(async () => {
     if (state.status === 'finished') {
@@ -290,13 +468,14 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
   );
 
   const updateNation = useCallback(async (nationId: string, patch: Partial<Nation>) => {
+    let previousNation: Nation | null = null;
     setState((previous) => ({
       ...previous,
-      nations: previous.nations.map((nation) =>
-        nation.id === nationId
-          ? { ...nation, ...patch, traits: { ...nation.traits, ...(patch.traits || {}) } }
-          : nation,
-      ),
+      nations: previous.nations.map((nation) => {
+        if (nation.id !== nationId) return nation;
+        previousNation = nation;
+        return { ...nation, ...patch, traits: { ...nation.traits, ...(patch.traits || {}) } };
+      }),
     }));
 
     const payload: Parameters<typeof apiUpdateAgent>[0] = { nation_id: nationId };
@@ -305,6 +484,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (patch.memory !== undefined) payload.memory = patch.memory;
     if (patch.yearlyAdvice !== undefined) payload.annual_advice = patch.yearlyAdvice;
     if (patch.traits?.expansion !== undefined) payload.aggression = patch.traits.expansion;
+    if (patch.traits?.cunning !== undefined) payload.cunning = patch.traits.cunning;
     if (patch.traits?.vengeance !== undefined) {
       payload.loyalty = Math.max(0, Math.min(100, 100 - patch.traits.vengeance));
     }
@@ -312,11 +492,32 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       await apiUpdateAgent(payload);
     } catch (error) {
+      if (previousNation) {
+        setState((previous) => ({
+          ...previous,
+          nations: previous.nations.map((nation) => (nation.id === nationId ? previousNation! : nation)),
+        }));
+      }
       const message = (error as { message?: string })?.message || 'Failed to update nation';
       setError(message);
       throw new Error(message);
     }
   }, []);
+
+  const updateMatchConfig = useCallback(async (patch: { maxYear?: number }) => {
+    try {
+      const result = await apiUpdateMatchConfig({
+        max_year: patch.maxYear,
+      });
+      if (result.state) {
+        applyBackend(result.state);
+      }
+    } catch (error) {
+      const message = (error as { message?: string })?.message || 'Failed to update match configuration';
+      setError(message);
+      throw new Error(message);
+    }
+  }, [applyBackend]);
 
   const openSettings = useCallback((source: SettingsSource, nationId?: string) => {
     setSettingsSource(source);
@@ -334,10 +535,12 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
       engine,
       error,
       startGameAction,
+      finishPreparationAction,
       advance,
       reset,
       refresh,
       setEndowment,
+      updateMatchConfig,
       updateNation,
       settingsOpen,
       settingsSource,
@@ -352,10 +555,12 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
       engine,
       error,
       startGameAction,
+      finishPreparationAction,
       advance,
       reset,
       refresh,
       setEndowment,
+      updateMatchConfig,
       updateNation,
       settingsOpen,
       settingsSource,

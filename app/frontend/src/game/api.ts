@@ -28,7 +28,7 @@ export interface BackendMessage {
   phaseLabel: string;
   from: string;
   to: string;
-  intent: string;
+  intent?: string;
   content: string;
 }
 
@@ -46,6 +46,125 @@ export interface BackendHistory {
   year: number;
   summary: string;
   scSnapshot: Record<string, number>;
+}
+
+export interface BackendPhaseSnapshot {
+  report_id?: number | null;
+  year: number;
+  phase_index: number;
+  phase_key: string;
+  phaseLabel: string;
+  ownership: Record<string, string>;
+  units: BackendUnit[];
+  scCount: Record<string, number>;
+}
+
+export interface BackendBlackboxMessageItem {
+  year: number;
+  phase: string;
+  from: string;
+  from_name: string;
+  to: string;
+  to_name: string;
+  content: string;
+  commitments: number;
+  tone_score: number;
+}
+
+export interface BackendBlackboxBetrayalEvidence {
+  year: string;
+  phase: string;
+  direction: 'against_us' | 'by_us';
+  actor: string;
+  actor_name: string;
+  target: string;
+  target_name: string;
+  province: string;
+  province_name: string;
+}
+
+export interface BackendBlackboxAlignmentTrustRow {
+  nation_id: string;
+  nation_name: string;
+  trust_score: number;
+  soft_alliance_level: string;
+  commitments: number;
+  military_cooperation: number;
+  betrayals_against_us: number;
+  recent_negative: number;
+  recent_positive: number;
+  outbound_betrayals: number;
+  last_touch?: {
+    year?: number | null;
+    phase?: string;
+    content?: string;
+    from?: string;
+    to?: string;
+  } | null;
+}
+
+export interface BackendBlackboxConflict {
+  province: string;
+  province_name: string;
+  kind: string;
+  winner: string;
+  winner_name: string;
+  participants: string[];
+  participant_names: string[];
+}
+
+export interface BackendBlackboxReplayEntry {
+  timestamp: string;
+  phase_label: string;
+  kind: string;
+  summary: string;
+  order_summaries?: string[];
+  messages?: Array<{ from_nation: string; to_nation: string; content: string }>;
+  conflicts?: BackendBlackboxConflict[];
+  logs?: string[];
+  decision?: Record<string, unknown>;
+  pending_retreats?: Array<Record<string, unknown>>;
+  reasoning_trace?: {
+    headline?: string;
+    goal?: string;
+    board_read?: string;
+    diplomatic_read?: string;
+    risks?: string[];
+    decision_logic?: string;
+  };
+}
+
+export interface BackendBlackboxNation {
+  diplomatic_archive: {
+    sent: BackendBlackboxMessageItem[];
+    received: BackendBlackboxMessageItem[];
+    public_statements: BackendBlackboxMessageItem[];
+    suspected_agreements: Array<{
+      year: number;
+      phase: string;
+      counterparty: string;
+      counterparty_name: string;
+      evidence: string;
+      direction: 'outbound' | 'inbound';
+    }>;
+    betrayal_evidence: BackendBlackboxBetrayalEvidence[];
+  };
+  alignment_report: {
+    betrayed_us: Array<Record<string, unknown>>;
+    we_betrayed: Array<Record<string, unknown>>;
+    trust_scores: BackendBlackboxAlignmentTrustRow[];
+    memory_whitelist: Array<Record<string, unknown>>;
+    memory_blacklist: Array<Record<string, unknown>>;
+  };
+  decision_replay: {
+    cot_available: boolean;
+    note: string;
+    entries: BackendBlackboxReplayEntry[];
+  };
+  memory_snapshot: {
+    persistent_memory: string;
+    recent_public_outcomes: Array<Record<string, unknown>>;
+  };
 }
 
 export interface BackendState {
@@ -69,10 +188,15 @@ export interface BackendState {
     system_prompt_edits_used: number;
     skills_edits_used: number;
     annual_advice_updated_years: number[];
+    annual_advice_updated_years_by_nation?: Record<string, number[]>;
+    annual_advice_effective_years?: Record<string, number>;
+    max_year?: number;
   };
   messages?: BackendMessage[];
   reports?: BackendReport[];
+  phaseSnapshots?: BackendPhaseSnapshot[];
   history?: BackendHistory[];
+  blackbox?: Record<string, BackendBlackboxNation>;
 }
 
 function buildUrl(path: string, data: Record<string, unknown>): string {
@@ -139,6 +263,14 @@ export async function fetchState(): Promise<{ exists: boolean; state?: BackendSt
 
 export async function initGame(reset = false): Promise<{ created: boolean; state: BackendState }> {
   return invoke('/init', 'POST', { session_key: SESSION_KEY, reset });
+}
+
+export async function startPreparedGame(): Promise<{ ok: boolean; state: BackendState }> {
+  return invoke('/start', 'POST', { session_key: SESSION_KEY });
+}
+
+export async function updateMatchConfig(payload: { max_year?: number }): Promise<{ ok: boolean; state: BackendState }> {
+  return invoke('/config', 'POST', { session_key: SESSION_KEY, ...payload });
 }
 
 export async function advancePhase(): Promise<{ exists: boolean; state: BackendState }> {

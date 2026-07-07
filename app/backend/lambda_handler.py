@@ -92,12 +92,10 @@ async def initialize_services_once():
 
             # MODULE_IMPORTS_START
             from services.database import initialize_database
-            from services.mock_data import initialize_mock_data
             # MODULE_IMPORTS_END
 
             # MODULE_STARTUP_START
             await initialize_database()
-            await initialize_mock_data()
             # MODULE_STARTUP_END
 
             services_initialized = True

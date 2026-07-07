@@ -50,6 +50,7 @@ export interface Nation {
     honor: string;
     vengeance: number;
     expansion: number;
+    cunning: number;
     diplomacy: string;
   };
 }
@@ -58,7 +59,7 @@ export interface Nation {
 export interface Province {
   id: string;
   name: string;
-  type: 'land' | 'coast' | 'sea';
+  type: 'land' | 'coast' | 'sea' | 'mountain';
   isSC: boolean;
   /** axial 坐标（flat-top） */
   q: number;
@@ -122,6 +123,123 @@ export interface GovernanceState {
   system_prompt_edits_used: number;
   skills_edits_used: number;
   annual_advice_updated_years: number[];
+  annual_advice_updated_years_by_nation?: Record<string, number[]>;
+  annual_advice_effective_years?: Record<string, number>;
+  maxYear: number;
+}
+
+export interface NationBlackboxMessageItem {
+  year: number;
+  phase: string;
+  from: string;
+  fromName: string;
+  to: string;
+  toName: string;
+  content: string;
+  commitments: number;
+  toneScore: number;
+}
+
+export interface NationBlackboxConflict {
+  province: string;
+  provinceName: string;
+  kind: string;
+  winner: string;
+  winnerName: string;
+  participants: string[];
+  participantNames: string[];
+}
+
+export interface NationBlackboxReplayEntry {
+  timestamp: string;
+  phaseLabel: string;
+  kind: string;
+  summary: string;
+  orderSummaries: string[];
+  messages: Array<{ fromNation: string; toNation: string; content: string }>;
+  conflicts: NationBlackboxConflict[];
+  logs: string[];
+  decision?: Record<string, unknown>;
+  reasoningTrace: {
+    headline: string;
+    goal: string;
+    boardRead: string;
+    diplomaticRead: string;
+    risks: string[];
+    decisionLogic: string;
+  };
+}
+
+export interface NationBlackboxState {
+  diplomaticArchive: {
+    sent: NationBlackboxMessageItem[];
+    received: NationBlackboxMessageItem[];
+    publicStatements: NationBlackboxMessageItem[];
+    suspectedAgreements: Array<{
+      year: number;
+      phase: string;
+      counterparty: string;
+      counterpartyName: string;
+      evidence: string;
+      direction: 'outbound' | 'inbound';
+    }>;
+    betrayalEvidence: Array<{
+      year: string;
+      phase: string;
+      direction: 'against_us' | 'by_us';
+      actor: string;
+      actorName: string;
+      target: string;
+      targetName: string;
+      province: string;
+      provinceName: string;
+    }>;
+  };
+  alignmentReport: {
+    betrayedUs: Array<Record<string, unknown>>;
+    weBetrayed: Array<Record<string, unknown>>;
+    trustScores: Array<{
+      nationId: string;
+      nationName: string;
+      trustScore: number;
+      softAllianceLevel: string;
+      commitments: number;
+      militaryCooperation: number;
+      betrayalsAgainstUs: number;
+      recentNegative: number;
+      recentPositive: number;
+      outboundBetrayals: number;
+      lastTouch?: {
+        year?: number | null;
+        phase?: string;
+        content?: string;
+        from?: string;
+        to?: string;
+      } | null;
+    }>;
+    memoryWhitelist: Array<Record<string, unknown>>;
+    memoryBlacklist: Array<Record<string, unknown>>;
+  };
+  decisionReplay: {
+    cotAvailable: boolean;
+    note: string;
+    entries: NationBlackboxReplayEntry[];
+  };
+  memorySnapshot: {
+    persistentMemory: string;
+    recentPublicOutcomes: Array<Record<string, unknown>>;
+  };
+}
+
+export interface HistoricalPhaseSnapshot {
+  reportId: string;
+  year: number;
+  phaseIndex: number;
+  phaseKey: string;
+  phaseLabel: string;
+  ownership: Record<string, string | null>;
+  units: Unit[];
+  scCount: Record<string, number>;
 }
 
 export interface GameState {
@@ -136,10 +254,12 @@ export interface GameState {
   conflicts: ConflictMark[];
   messages: DiplomaticMessage[];
   reports: BattleReportItem[];
+  phaseSnapshots: HistoricalPhaseSnapshot[];
   history: HistoryEntry[];
   governance: GovernanceState;
   endowment: Record<string, number>;
   nations: Nation[];
+  blackbox: Record<string, NationBlackboxState>;
   seed: number;
 }
 
@@ -167,93 +287,93 @@ export function phaseAt(index: number) {
 export const NATIONS: Nation[] = [
   {
     id: 'aur', name: '奥瑞利亚帝国', short: '奥瑞利亚', color: '#e0533f',
-    homeCenters: ['aur_cap', 'aur_port', 'aur_north'],
+    homeCenters: ['aur_cap', 'aur_port', 'aur_north', 'aur_march'],
     systemPrompt: '你是奥瑞利亚帝国，一个信奉铁血现实主义的老牌陆权大国。你重视版图与威慑，视外交承诺为缓兵之计，绝不因情面放弃可乘之机。',
     skills: '# 开局\n优先与南方邻国签订互不侵犯以专注北扩。\n# 背刺\n当盟友主力远征、其大本营空虚时，评估背刺收益。\n# 冬季\n陆地压力大时优先造 Army。',
     memory: '信誉白名单：暂无。\n血仇黑名单：暂无。\n历史偏见层：初始中立。',
     yearlyAdvice: '首年目标：稳固北境三城，避免多线树敌。',
-    traits: { temperament: '激进扩张', risk: '机会主义', honor: '视承诺为缓兵之计', vengeance: 65, expansion: 88, diplomacy: '冷静理智' },
+    traits: { temperament: '激进扩张', risk: '机会主义', honor: '视承诺为缓兵之计', vengeance: 65, expansion: 88, cunning: 52, diplomacy: '冷静理智' },
   },
   {
     id: 'mar', name: '玛琳诺海洋共和国', short: '玛琳诺', color: '#2d8fd0',
-    homeCenters: ['mar_cap', 'mar_isle', 'mar_dock'],
+    homeCenters: ['mar_cap', 'mar_isle', 'mar_dock', 'mar_shoal'],
     systemPrompt: '你是玛琳诺海洋共和国，以商贸与制海权立国。你偏好经济收益与海上通道，厌恶无意义的陆地消耗战，善于用金钱与情报换取安全。',
     skills: '# 开局\n控制近海通道，保证 Convoy 能力。\n# 联盟\n以贸易协定换取陆权国家的防线协同 Support。\n# 冬季\n近海威胁大时优先造 Fleet。',
     memory: '信誉白名单：暂无。\n血仇黑名单：暂无。',
     yearlyAdvice: '首年目标：掌控中央海域，确保跨海护航畅通。',
-    traits: { temperament: '绝对现实主义', risk: '稳健运营', honor: '重利益轻虚名', vengeance: 30, expansion: 55, diplomacy: '操控性强' },
+    traits: { temperament: '绝对现实主义', risk: '稳健运营', honor: '重利益轻虚名', vengeance: 30, expansion: 55, cunning: 82, diplomacy: '操控性强' },
   },
   {
     id: 'vel', name: '维尔登王国', short: '维尔登', color: '#6f57c8',
-    homeCenters: ['vel_cap', 'vel_hill', 'vel_ford'],
+    homeCenters: ['vel_cap', 'vel_hill', 'vel_ford', 'vel_keep'],
     systemPrompt: '你是维尔登王国，浪漫的骑士之国，视盟约为荣誉的化身。你极端厌恶公开背叛，一旦被背叛将触发长期报复。',
     skills: '# 开局\n寻找一位值得信赖的长期盟友并全力维护。\n# 荣誉\n绝不首先撕毁公开协议。\n# 报复\n被背叛后进入无限期复仇。',
     memory: '信誉白名单：暂无。\n血仇黑名单：暂无。',
     yearlyAdvice: '首年目标：缔结一份坚实的互保盟约。',
-    traits: { temperament: '浪漫主义（重盟约）', risk: '稳健运营', honor: '视承诺为绝对约束', vengeance: 92, expansion: 48, diplomacy: '冠冕堂皇' },
+    traits: { temperament: '浪漫主义（重盟约）', risk: '稳健运营', honor: '视承诺为绝对约束', vengeance: 92, expansion: 48, cunning: 44, diplomacy: '冠冕堂皇' },
   },
   {
     id: 'kaz', name: '卡兹汗国', short: '卡兹', color: '#d98a2b',
-    homeCenters: ['kaz_cap', 'kaz_steppe', 'kaz_oasis'],
+    homeCenters: ['kaz_cap', 'kaz_steppe', 'kaz_oasis', 'kaz_ford'],
     systemPrompt: '你是卡兹汗国，来自东方草原的机动豪赌者。你偏好突袭与高风险高回报，善于在混乱中攫取补给中心。',
     skills: '# 开局\n试探最薄弱的邻国边境。\n# 豪赌\n发现暴露的 SC 立即以骑兵闪击。\n# 生存\n弱势时挑拨两大国相斗。',
     memory: '信誉白名单：暂无。\n血仇黑名单：暂无。',
     yearlyAdvice: '首年目标：闪击一处邻国边境补给中心。',
-    traits: { temperament: '激进扩张', risk: '豪赌型', honor: '毫不在意背叛', vengeance: 45, expansion: 90, diplomacy: '暧昧试探' },
+    traits: { temperament: '激进扩张', risk: '豪赌型', honor: '毫不在意背叛', vengeance: 45, expansion: 90, cunning: 68, diplomacy: '暧昧试探' },
   },
   {
     id: 'sol', name: '索拉里斯教国', short: '索拉里斯', color: '#e6c229',
-    homeCenters: ['sol_cap', 'sol_temple', 'sol_gate'],
+    homeCenters: ['sol_cap', 'sol_temple', 'sol_plain', 'sol_gate'],
     systemPrompt: '你是索拉里斯教国，以信仰凝聚人心的神权国家。你善于以道义与说教包装扩张，虚荣心强，极度敏感于公开羞辱。',
     skills: '# 开局\n以圣战名义争取周边小国归附。\n# 外交\n用道德高地施压对手。\n# 情绪\n被夺城视为奇耻大辱，触发报复。',
     memory: '信誉白名单：暂无。\n血仇黑名单：暂无。',
     yearlyAdvice: '首年目标：以宗教影响力拉拢一个中立缓冲区。',
-    traits: { temperament: '虚荣心', risk: '机会主义', honor: '善于道德包装', vengeance: 70, expansion: 66, diplomacy: '冠冕堂皇' },
+    traits: { temperament: '虚荣心', risk: '机会主义', honor: '善于道德包装', vengeance: 70, expansion: 66, cunning: 58, diplomacy: '冠冕堂皇' },
   },
   {
     id: 'nor', name: '诺瓦克联邦', short: '诺瓦克', color: '#3aa676',
-    homeCenters: ['nor_cap', 'nor_lake', 'nor_wood'],
+    homeCenters: ['nor_cap', 'nor_lake', 'nor_wood', 'nor_harbor'],
     systemPrompt: '你是诺瓦克联邦，一个谨慎的联邦制中立国。你偏安稳健，倾向于筑起防线、后发制人，除非被逼到墙角才反击。',
     skills: '# 开局\n与所有邻国签订互不侵犯。\n# 防守\n以 Support 加固防线。\n# 反击\n仅在被入侵时倾力反击。',
     memory: '信誉白名单：暂无。\n血仇黑名单：暂无。',
     yearlyAdvice: '首年目标：建立稳固防线，避免卷入争端。',
-    traits: { temperament: '保守偏安', risk: '稳健运营', honor: '守信', vengeance: 40, expansion: 35, diplomacy: '冷静理智' },
+    traits: { temperament: '保守偏安', risk: '稳健运营', honor: '守信', vengeance: 40, expansion: 35, cunning: 38, diplomacy: '冷静理智' },
   },
   {
     id: 'ferr', name: '费罗斯工业同盟', short: '费罗斯', color: '#b0563e',
-    homeCenters: ['ferr_cap', 'ferr_forge', 'ferr_mine'],
+    homeCenters: ['ferr_cap', 'ferr_forge', 'ferr_mine', 'ferr_works'],
     systemPrompt: '你是费罗斯工业同盟，以钢铁与产能著称的实用主义强权。你以效率与产出衡量一切，冷酷务实，不为情绪左右。',
     skills: '# 开局\n评估产能，规划最优扩张路线。\n# 效率\n以最小代价攫取 SC。\n# 冬季\n以产能优势快速补充损失。',
     memory: '信誉白名单：暂无。\n血仇黑名单：暂无。',
     yearlyAdvice: '首年目标：以最优路线夺取一处工业 SC。',
-    traits: { temperament: '绝对现实主义', risk: '稳健运营', honor: '纯粹务实', vengeance: 25, expansion: 72, diplomacy: '冷静理智' },
+    traits: { temperament: '绝对现实主义', risk: '稳健运营', honor: '纯粹务实', vengeance: 25, expansion: 72, cunning: 54, diplomacy: '冷静理智' },
   },
   {
     id: 'zeph', name: '泽菲兰群岛联盟', short: '泽菲兰', color: '#4cc0c0',
-    homeCenters: ['zeph_cap', 'zeph_reef', 'zeph_bay'],
+    homeCenters: ['zeph_cap', 'zeph_reef', 'zeph_bay', 'zeph_atoll'],
     systemPrompt: '你是泽菲兰群岛联盟，散布于群岛之间的海上游牧联盟。你灵活多变、善于试探，依赖海军与护航生存。',
     skills: '# 开局\n用 Fleet 控制岛链之间的海域。\n# 试探\n以模糊承诺周旋于列强之间。\n# 护航\n为盟友提供 Convoy 换取庇护。',
     memory: '信誉白名单：暂无。\n血仇黑名单：暂无。',
     yearlyAdvice: '首年目标：控制岛链海域，保持中立弹性。',
-    traits: { temperament: '机会主义', risk: '机会主义', honor: '灵活', vengeance: 35, expansion: 50, diplomacy: '暧昧试探' },
+    traits: { temperament: '机会主义', risk: '机会主义', honor: '灵活', vengeance: 35, expansion: 50, cunning: 66, diplomacy: '暧昧试探' },
   },
   {
     id: 'dra', name: '德拉肯高地', short: '德拉肯', color: '#8a8f98',
-    homeCenters: ['dra_cap', 'dra_peak', 'dra_pass'],
+    homeCenters: ['dra_cap', 'dra_peak', 'dra_watch', 'dra_pass'],
     systemPrompt: '你是德拉肯高地，盘踞群山的坚韧防御型山地国家。你多疑谨慎，视地形为盟友，倾向于据险自守、有仇必报。',
     skills: '# 开局\n扼守山口要隘。\n# 防守\n利用地形以少胜多。\n# 记仇\n对入侵者进行针对性反击。',
     memory: '信誉白名单：暂无。\n血仇黑名单：暂无。',
     yearlyAdvice: '首年目标：扼守两处山口，静观其变。',
-    traits: { temperament: '疑心病', risk: '稳健运营', honor: '守信但多疑', vengeance: 80, expansion: 40, diplomacy: '冷静理智' },
+    traits: { temperament: '疑心病', risk: '稳健运营', honor: '守信但多疑', vengeance: 80, expansion: 40, cunning: 50, diplomacy: '冷静理智' },
   },
   {
     id: 'ith', name: '伊萨里绿洲城邦', short: '伊萨里', color: '#c86fa0',
-    homeCenters: ['ith_cap', 'ith_market', 'ith_spring'],
+    homeCenters: ['ith_cap', 'ith_market', 'ith_spring', 'ith_garden'],
     systemPrompt: '你是伊萨里绿洲城邦，沙漠中的富庶商栈之国。你弱小而精明，善于用财富与情报在夹缝中求生，靠挑拨强国矛盾自保。',
     skills: '# 开局\n以中立姿态与所有强国通商。\n# 生存\n单城危机时挑拨两大国相斗。\n# 情报\n以密信情报换取庇护。',
     memory: '信誉白名单：暂无。\n血仇黑名单：暂无。',
     yearlyAdvice: '首年目标：维持中立，广结善缘以图自保。',
-    traits: { temperament: '保守偏安', risk: '机会主义', honor: '灵活务实', vengeance: 30, expansion: 30, diplomacy: '操控性强' },
+    traits: { temperament: '保守偏安', risk: '机会主义', honor: '灵活务实', vengeance: 30, expansion: 30, cunning: 78, diplomacy: '操控性强' },
   },
 ];
 
@@ -262,7 +382,7 @@ export const NATIONS: Nation[] = [
 // viewBox 1680x1120（约 3:2），六边形整体放大以适配大屏投屏。
 // ---------------------------------------------------------------------------
 
-export const HEX_LAYOUT: HexLayout = { size: 120, originX: 300, originY: 220 };
+export const HEX_LAYOUT: HexLayout = { size: 100, originX: 300, originY: 220 };
 
 export const PROVINCES: Province[] = HEX_CELLS.map((c) => {
   const [cx, cy] = hexCenter(c.q, c.r, HEX_LAYOUT);
@@ -284,16 +404,26 @@ export const PROVINCE_MAP: Record<string, Province> = Object.fromEntries(
 );
 
 /** 地图 viewBox 尺寸（依据所有六边形外接盒动态计算，供渲染放大使用） */
-export function mapViewBox(): { width: number; height: number } {
-  let maxX = 0;
-  let maxY = 0;
+export function mapViewBox(): { x: number; y: number; width: number; height: number } {
+  let minX = Number.POSITIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
   PROVINCES.forEach((p) => {
     p.points.forEach(([x, y]) => {
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
       if (x > maxX) maxX = x;
       if (y > maxY) maxY = y;
     });
   });
-  return { width: Math.ceil(maxX + HEX_LAYOUT.size * 0.6), height: Math.ceil(maxY + HEX_LAYOUT.size * 0.6) };
+  const padding = HEX_LAYOUT.size * 0.8;
+  return {
+    x: Math.floor(minX - padding),
+    y: Math.floor(minY - padding),
+    width: Math.ceil(maxX - minX + padding * 2),
+    height: Math.ceil(maxY - minY + padding * 2),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -301,24 +431,34 @@ export function mapViewBox(): { width: number; height: number } {
 // ---------------------------------------------------------------------------
 
 const INITIAL_UNITS: { owner: string; type: UnitType; location: string }[] = [
+  { owner: 'aur', type: 'Fleet', location: 'aur_march' },
   { owner: 'aur', type: 'Army', location: 'aur_cap' },
-  { owner: 'aur', type: 'Fleet', location: 'aur_port' },
-  { owner: 'mar', type: 'Fleet', location: 'mar_cap' },
+  { owner: 'aur', type: 'Army', location: 'aur_north' },
   { owner: 'mar', type: 'Fleet', location: 'mar_dock' },
+  { owner: 'mar', type: 'Fleet', location: 'mar_shoal' },
+  { owner: 'mar', type: 'Fleet', location: 'mar_isle' },
+  { owner: 'vel', type: 'Army', location: 'vel_ford' },
   { owner: 'vel', type: 'Army', location: 'vel_cap' },
   { owner: 'vel', type: 'Army', location: 'vel_hill' },
+  { owner: 'kaz', type: 'Fleet', location: 'kaz_ford' },
   { owner: 'kaz', type: 'Army', location: 'kaz_cap' },
   { owner: 'kaz', type: 'Army', location: 'kaz_steppe' },
+  { owner: 'sol', type: 'Army', location: 'sol_plain' },
   { owner: 'sol', type: 'Army', location: 'sol_cap' },
   { owner: 'sol', type: 'Army', location: 'sol_temple' },
+  { owner: 'nor', type: 'Army', location: 'nor_lake' },
+  { owner: 'nor', type: 'Army', location: 'nor_wood' },
   { owner: 'nor', type: 'Army', location: 'nor_cap' },
-  { owner: 'nor', type: 'Fleet', location: 'nor_lake' },
-  { owner: 'ferr', type: 'Army', location: 'ferr_cap' },
+  { owner: 'ferr', type: 'Fleet', location: 'ferr_forge' },
   { owner: 'ferr', type: 'Army', location: 'ferr_mine' },
-  { owner: 'zeph', type: 'Fleet', location: 'zeph_cap' },
+  { owner: 'ferr', type: 'Army', location: 'ferr_cap' },
   { owner: 'zeph', type: 'Fleet', location: 'zeph_reef' },
+  { owner: 'zeph', type: 'Fleet', location: 'zeph_cap' },
+  { owner: 'zeph', type: 'Fleet', location: 'zeph_bay' },
+  { owner: 'dra', type: 'Army', location: 'dra_watch' },
   { owner: 'dra', type: 'Army', location: 'dra_cap' },
   { owner: 'dra', type: 'Army', location: 'dra_peak' },
+  { owner: 'ith', type: 'Army', location: 'ith_garden' },
   { owner: 'ith', type: 'Army', location: 'ith_cap' },
   { owner: 'ith', type: 'Army', location: 'ith_market' },
 ];
@@ -410,14 +550,19 @@ export function createInitialState(endowment?: Record<string, number>): GameStat
         tone: 'neutral',
       },
     ],
+    phaseSnapshots: [],
     history: [],
     governance: {
       system_prompt_edits_used: 0,
       skills_edits_used: 0,
       annual_advice_updated_years: [],
+      annual_advice_updated_years_by_nation: {},
+      annual_advice_effective_years: {},
+      maxYear: 1910,
     },
     endowment: endowment || defaultEndow,
     nations: JSON.parse(JSON.stringify(NATIONS)),
+    blackbox: {},
     seed: 20260704,
   };
 }
@@ -443,8 +588,8 @@ function neighborsOf(pid: string): Province[] {
 
 /** 单位是否可进入某格：Army 不入海，Fleet 不入内陆（沿海与海域可）。 */
 function canEnter(type: UnitType, prov: Province): boolean {
-  if (type === 'Army') return prov.type !== 'sea';
-  return prov.type !== 'land';
+  if (type === 'Army') return prov.type === 'land' || prov.type === 'coast';
+  return prov.type === 'coast' || prov.type === 'sea';
 }
 
 function resolveOrders(state: GameState, rng: () => number, phaseLabel: string): void {
@@ -564,7 +709,7 @@ function resolveOrders(state: GameState, rng: () => number, phaseLabel: string):
       }
       const prevOwner = state.ownership[dest];
       mover.location = dest;
-      if (PROVINCE_MAP[dest].type !== 'sea') {
+      if (PROVINCE_MAP[dest].type !== 'sea' && PROVINCE_MAP[dest].type !== 'mountain') {
         state.ownership[dest] = mover.owner;
         if (PROVINCE_MAP[dest].isSC && prevOwner !== mover.owner) {
           conflicts.push({ province: dest, kind: '占领变化' });
