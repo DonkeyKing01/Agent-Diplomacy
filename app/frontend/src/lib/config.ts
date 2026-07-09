@@ -80,6 +80,10 @@ export async function loadRuntimeConfig(): Promise<void> {
   }
 }
 
+export function finishRuntimeConfigWithoutFetch(): void {
+  configLoading = false;
+}
+
 // Get current configuration
 export function getConfig() {
   // If config is still loading, return default config to avoid using stale Vite env vars
