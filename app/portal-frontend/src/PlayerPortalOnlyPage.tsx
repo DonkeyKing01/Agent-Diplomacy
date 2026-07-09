@@ -81,6 +81,11 @@ const PlayerPortalOnlyPage: React.FC = () => {
     });
   }, [data]);
 
+  const nationColorById = useMemo(() => {
+    if (!data) return {} as Record<string, string>;
+    return Object.fromEntries((data.map.nations || []).map((nation) => [nation.id, nation.color]));
+  }, [data]);
+
   if (!data || !mapState) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-background p-6 text-foreground">
@@ -154,7 +159,14 @@ const PlayerPortalOnlyPage: React.FC = () => {
                 {(data.blackbox?.alignment_report?.trust_scores || []).map((row) => (
                   <div key={row.nation_id} className="rounded-lg border border-border/70 bg-background/40 px-3 py-3">
                     <div className="flex items-center justify-between gap-3">
-                      <div className="font-medium">{row.nation_name}</div>
+                      <div className="flex items-center gap-3">
+                        <span
+                          className="h-3.5 w-3.5 shrink-0 rounded-sm border border-white/15"
+                          style={{ backgroundColor: nationColorById[row.nation_id] || '#64748b' }}
+                          aria-hidden="true"
+                        />
+                        <div className="font-medium">{row.nation_name}</div>
+                      </div>
                       <div className="text-sm font-semibold text-primary">{row.trust_score} / 100</div>
                     </div>
                     <div className="mt-1 text-xs text-muted-foreground">

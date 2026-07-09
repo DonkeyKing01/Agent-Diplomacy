@@ -162,29 +162,30 @@ def test_validate_orders_fills_missing_unit_orders_with_proactive_expansion():
     orders = _validate_orders("kaz", [], state)
 
     assert len(orders) == 2
-    assert any(order["action"] == "Move" and order["target"] == "sol_gate" for order in orders)
+    assert all(order["action"] == "Move" for order in orders)
+    assert {order["target"] for order in orders} == {"mt_goldwall", "kaz_ford"}
 
 
 def test_support_is_cut_when_supporter_is_attacked_from_elsewhere():
     provinces = {
         "aur_cap": "aur",
         "dra_peak": "dra",
-        "dra_cap": "dra",
+        "dra_watch": "dra",
         "kaz_steppe": "kaz",
     }
     units = [
         {"owner": "aur", "type": "Army", "location": "aur_cap"},
         {"owner": "dra", "type": "Army", "location": "dra_peak"},
-        {"owner": "dra", "type": "Army", "location": "dra_cap"},
+        {"owner": "dra", "type": "Army", "location": "dra_watch"},
         {"owner": "kaz", "type": "Army", "location": "kaz_steppe"},
     ]
     orders = {
         "aur": [{"unit_province": "aur_cap", "action": "Hold", "target": "", "support_of": ""}],
         "dra": [
             {"unit_province": "dra_peak", "action": "Move", "target": "aur_cap", "support_of": ""},
-            {"unit_province": "dra_cap", "action": "Support", "target": "aur_cap", "support_of": "dra_peak"},
+            {"unit_province": "dra_watch", "action": "Support", "target": "aur_cap", "support_of": "dra_peak"},
         ],
-        "kaz": [{"unit_province": "kaz_steppe", "action": "Move", "target": "dra_cap", "support_of": ""}],
+        "kaz": [{"unit_province": "kaz_steppe", "action": "Move", "target": "dra_watch", "support_of": ""}],
     }
 
     new_provinces, new_units, pending_conflicts, pending_retreats = adjudicate(
@@ -194,11 +195,9 @@ def test_support_is_cut_when_supporter_is_attacked_from_elsewhere():
     assert new_provinces["aur_cap"] == "aur"
     assert any(unit["owner"] == "aur" and unit["location"] == "aur_cap" for unit in new_units)
     assert pending_retreats == []
-    defense_conflict = next(
-        conflict for conflict in pending_conflicts if conflict["province"] == "aur_cap" and conflict["kind"] == "防守"
-    )
-    assert set(defense_conflict.get("participants", [])) == {"一排领地", "九排领地"}
-
+    defense_conflict = next(conflict for conflict in pending_conflicts if conflict["province"] == "aur_cap")
+    assert defense_conflict["kind"] == "\u9632\u5b88"
+    assert set(defense_conflict.get("participants", [])) == {"\u4e00\u6392\u9886\u5730", "\u4e5d\u6392\u9886\u5730"}
 
 def test_convoy_chain_allows_army_to_cross_multiple_sea_zones():
     provinces = {
@@ -369,12 +368,35 @@ def test_initial_nations_are_named_by_platoon():
 
 def test_two_island_map_has_neutral_central_contested_region():
     ownership, units, sc_count = initial_board()
-    central_public = {"mt_ashencrest", "dra_cap", "sol_temple", "nor_wood", "nor_cap", "vel_hill", "lighthouse_isle"}
+    central_sea_corridor = {
+        "mt_ashencrest",
+        "dra_cap",
+        "dra_pass",
+        "sol_temple",
+        "nor_wood",
+        "nor_cap",
+        "vel_hill",
+        "sea_south_inlet",
+        "sea_southwest_tail",
+    }
 
-    assert all(PROVINCES[province_id]["sc"] for province_id in central_public)
-    assert all(ownership[province_id] == "" for province_id in central_public)
+    assert all(PROVINCES[province_id]["type"] == "sea" for province_id in central_sea_corridor)
+    assert all(not PROVINCES[province_id]["sc"] for province_id in central_sea_corridor)
+    assert all(ownership[province_id] == "" for province_id in central_sea_corridor)
+    assert ownership["lighthouse_isle"] == ""
+    assert PROVINCES["lighthouse_isle"]["sc"]
+    assert ownership["mt_rimepass"] == "aur"
+    assert ownership["aur_cliff"] == "aur"
+    assert ownership["aur_north"] == ""
+    assert ownership["aur_port"] == ""
     assert sc_count == {nation["id"]: len(HOME_CENTERS[nation["id"]]) for nation in NATIONS}
     assert len(units) == 30
-    assert PROVINCES["dra_cap"]["type"] == "coast"
+    assert PROVINCES["dra_cap"]["type"] == "sea"
     assert "aur_cap" in PROVINCES["dra_cap"]["adj"]
     assert "kaz_steppe" in PROVINCES["dra_cap"]["adj"]
+    assert any(unit["owner"] == "aur" and unit["type"] == "Fleet" and unit["location"] == "aur_cliff" for unit in units)
+    assert all(
+        (unit["type"] == "Fleet" and PROVINCES[unit["location"]]["type"] in {"coast", "sea"})
+        or (unit["type"] == "Army" and PROVINCES[unit["location"]]["type"] in {"land", "coast"})
+        for unit in units
+    )

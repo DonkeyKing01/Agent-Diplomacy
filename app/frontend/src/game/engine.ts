@@ -289,7 +289,7 @@ export function phaseAt(index: number) {
 export const NATIONS: Nation[] = [
   {
     id: 'aur', name: '一排领地', short: '一排', color: '#e0533f',
-    homeCenters: ['aur_march', 'aur_port', 'aur_north', 'aur_cap'],
+    homeCenters: ['aur_march', 'mt_rimepass', 'aur_cliff', 'aur_cap'],
     systemPrompt: '你是一排领地的最高决策智能体，位于西北岛。先稳住本岛北侧，再争夺中央公共领地。',
     skills: '# 开局\n守住西北岛上半区，抢占中央北港。\n# 岛间\n舰队优先控海，陆军跨海前确认 Convoy 链路。\n# 风控\n不要同时放空本岛门户和中央前线。',
     memory: '信誉白名单：暂无。\n血仇黑名单：暂无。\n历史偏见层：初始中立。',
@@ -435,7 +435,7 @@ export function mapViewBox(): { x: number; y: number; width: number; height: num
 const INITIAL_UNITS: { owner: string; type: UnitType; location: string }[] = [
   { owner: 'aur', type: 'Fleet', location: 'aur_march' },
   { owner: 'aur', type: 'Army', location: 'aur_cap' },
-  { owner: 'aur', type: 'Fleet', location: 'aur_port' },
+  { owner: 'aur', type: 'Fleet', location: 'aur_cliff' },
   { owner: 'mar', type: 'Fleet', location: 'mar_dock' },
   { owner: 'mar', type: 'Fleet', location: 'mar_shoal' },
   { owner: 'mar', type: 'Army', location: 'mar_cap' },

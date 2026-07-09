@@ -32,6 +32,7 @@ npm-debug.log*
 logs/
 *.log
 uploads/
+app/backend/runtime/
 
 # Project-local caches / generated platform files
 .atoms/

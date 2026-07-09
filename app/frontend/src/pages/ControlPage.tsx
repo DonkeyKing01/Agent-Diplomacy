@@ -3,7 +3,15 @@ import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Brain, ChevronRight, Copy, Download, Flag, KeyRound, Loader2, Play, Power, Radio, RotateCcw, Settings2 } from 'lucide-react';
 import { useGame } from '@/game/GameContext';
-import { fetchSpectatorCredentials, fetchSpectatorNetworkInfo, SpectatorCredentialsResponse, SpectatorNetworkInfoResponse } from '@/game/api';
+import {
+  fetchLlmConfig,
+  fetchSpectatorCredentials,
+  fetchSpectatorNetworkInfo,
+  LlmRuntimeConfig,
+  SpectatorCredentialsResponse,
+  SpectatorNetworkInfoResponse,
+  updateLlmConfig,
+} from '@/game/api';
 import { createInitialState, exportState, phaseAt, PHASES } from '@/game/engine';
 import { buildPortalSnapshotBundle } from '@/game/portalSnapshot';
 import AppShell from '@/components/AppShell';
@@ -22,11 +30,19 @@ import {
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { getPortalSnapshotURL } from '@/lib/config';
 import { cn } from '@/lib/utils';
 
 const INITIAL_OWNERSHIP = createInitialState().ownership;
+const EMPTY_LLM_CONFIG: LlmRuntimeConfig = {
+  active_provider: 'openai',
+  openai: { api_key: '', base_url: '', model: 'deepseek-v4-flash' },
+  anthropic: { api_key: '', base_url: 'https://api.anthropic.com', model: 'claude-sonnet-4-20250514' },
+  gemini: { api_key: '', base_url: 'https://generativelanguage.googleapis.com', model: 'gemini-2.5-pro' },
+  updated_at: null,
+};
 
 const ControlPage: React.FC = () => {
   const {
@@ -59,10 +75,36 @@ const ControlPage: React.FC = () => {
     }
     return window.localStorage.getItem('player-share-base-url') || '';
   });
+  const [llmConfig, setLlmConfig] = useState<LlmRuntimeConfig>(EMPTY_LLM_CONFIG);
+  const [llmConfigLoading, setLlmConfigLoading] = useState(true);
+  const [llmConfigSaving, setLlmConfigSaving] = useState(false);
 
   useEffect(() => {
     setMaxYearDraft(String(state.governance.maxYear || 1910));
   }, [state.governance.maxYear]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const result = await fetchLlmConfig();
+        if (!cancelled) {
+          setLlmConfig(result.config);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          toast.error((error as Error).message || '加载模型配置失败');
+        }
+      } finally {
+        if (!cancelled) {
+          setLlmConfigLoading(false);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -114,6 +156,46 @@ const ControlPage: React.FC = () => {
       setShareBaseUrl(network.recommended_base_url);
     }
     return { result, network };
+  };
+
+  const handleLlmConfigFieldChange = (
+    provider: 'openai' | 'anthropic' | 'gemini',
+    field: 'api_key' | 'base_url' | 'model',
+    value: string,
+  ) => {
+    setLlmConfig((previous) => ({
+      ...previous,
+      [provider]: {
+        ...previous[provider],
+        [field]: value,
+      },
+    }));
+  };
+
+  const handleReloadLlmConfig = async () => {
+    setLlmConfigLoading(true);
+    try {
+      const result = await fetchLlmConfig();
+      setLlmConfig(result.config);
+      toast.success('已重新读取当前模型配置');
+    } catch (error) {
+      toast.error((error as Error).message || '读取模型配置失败');
+    } finally {
+      setLlmConfigLoading(false);
+    }
+  };
+
+  const handleSaveLlmConfig = async () => {
+    setLlmConfigSaving(true);
+    try {
+      const result = await updateLlmConfig(llmConfig);
+      setLlmConfig(result.config);
+      toast.success('模型配置已保存，下一次阶段推进会立即使用新配置');
+    } catch (error) {
+      toast.error((error as Error).message || '保存模型配置失败');
+    } finally {
+      setLlmConfigSaving(false);
+    }
   };
 
   const normalizedShareBaseUrl = shareBaseUrl.trim().replace(/\/+$/, '');
@@ -404,6 +486,115 @@ const ControlPage: React.FC = () => {
                 >
                   <div className="text-xs opacity-70">{item.season}</div>
                   <div className="mt-1 font-medium leading-tight">{item.label}</div>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          <section className="rounded-lg border border-border bg-card p-6">
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h3 className="font-display text-lg font-semibold">本机模型配置</h3>
+                <div className="mt-1 text-sm text-muted-foreground">
+                  这里保存的是本地真实后端配置。保存后下一次 AI 决策会立即使用新设置。
+                </div>
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  className="bg-transparent hover:bg-secondary"
+                  onClick={handleReloadLlmConfig}
+                  disabled={llmConfigLoading || llmConfigSaving}
+                >
+                  {llmConfigLoading ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : null}
+                  重新读取
+                </Button>
+                <Button onClick={handleSaveLlmConfig} disabled={llmConfigLoading || llmConfigSaving}>
+                  {llmConfigSaving ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : null}
+                  保存并应用
+                </Button>
+              </div>
+            </div>
+
+            <div className="mb-4 rounded-md border border-border/70 bg-secondary/20 p-4 text-sm text-muted-foreground">
+              <div>
+                当前 AI 决策提供商：<span className="font-mono text-foreground">{llmConfig.active_provider}</span>
+              </div>
+              <div>OpenAI 一栏兼容 DeepSeek 等 OpenAI-compatible 服务。</div>
+              <div>Anthropic 与 Gemini 会走各自官方接口，保存后会真正切换后端调用链路。</div>
+              <div>
+                上次保存时间：<span className="font-mono text-foreground">{llmConfig.updated_at || '尚未保存过本地覆盖配置'}</span>
+              </div>
+            </div>
+
+            <div className="mb-6 space-y-1.5">
+              <Label htmlFor="active-provider">当前决策提供商</Label>
+              <select
+                id="active-provider"
+                value={llmConfig.active_provider}
+                onChange={(event) =>
+                  setLlmConfig((previous) => ({
+                    ...previous,
+                    active_provider: event.target.value as 'openai' | 'anthropic' | 'gemini',
+                  }))
+                }
+                className="h-11 w-full rounded-md border border-input bg-background px-3 text-sm outline-none ring-offset-background focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <option value="openai">OpenAI / DeepSeek / OpenAI-compatible</option>
+                <option value="anthropic">Anthropic Claude</option>
+                <option value="gemini">Google Gemini</option>
+              </select>
+            </div>
+
+            <div className="grid gap-4 lg:grid-cols-3">
+              {([
+                {
+                  key: 'openai',
+                  title: 'OpenAI / Compatible',
+                  placeholder: '例如 https://api.deepseek.com',
+                },
+                {
+                  key: 'anthropic',
+                  title: 'Anthropic',
+                  placeholder: '默认 https://api.anthropic.com',
+                },
+                {
+                  key: 'gemini',
+                  title: 'Gemini',
+                  placeholder: '默认 https://generativelanguage.googleapis.com',
+                },
+              ] as const).map((provider) => (
+                <div key={provider.key} className="space-y-3 rounded-md border border-border/70 bg-background/30 p-4">
+                  <div className="font-medium text-foreground">{provider.title}</div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor={`${provider.key}-api-key`}>API Key</Label>
+                    <Input
+                      id={`${provider.key}-api-key`}
+                      type="password"
+                      autoComplete="off"
+                      value={llmConfig[provider.key].api_key}
+                      onChange={(event) => handleLlmConfigFieldChange(provider.key, 'api_key', event.target.value)}
+                      placeholder="输入 API Key"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor={`${provider.key}-base-url`}>Base URL</Label>
+                    <Input
+                      id={`${provider.key}-base-url`}
+                      value={llmConfig[provider.key].base_url}
+                      onChange={(event) => handleLlmConfigFieldChange(provider.key, 'base_url', event.target.value)}
+                      placeholder={provider.placeholder}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor={`${provider.key}-model`}>模型名</Label>
+                    <Input
+                      id={`${provider.key}-model`}
+                      value={llmConfig[provider.key].model}
+                      onChange={(event) => handleLlmConfigFieldChange(provider.key, 'model', event.target.value)}
+                      placeholder="输入模型名"
+                    />
+                  </div>
                 </div>
               ))}
             </div>

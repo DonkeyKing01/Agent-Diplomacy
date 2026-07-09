@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+import httpx
 from openai import AsyncOpenAI
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -44,6 +45,7 @@ from services.game_engine import (
 )
 from services.game_logs import append_game_log, game_log_path, read_game_log, reset_game_log
 from services.game_sessions import Game_sessionsService
+from services.llm_runtime_config import active_llm_runtime_config, load_llm_runtime_config, save_llm_runtime_config
 from services.nation_agents import Nation_agentsService
 from services.war_reports import War_reportsService
 
@@ -129,6 +131,19 @@ class LocalTemplateSyncRequest(BaseModel):
     session_key: str = SESSION_KEY_DEFAULT
 
 
+class LlmProviderConfig(BaseModel):
+    api_key: str = ""
+    base_url: str = ""
+    model: str = ""
+
+
+class LlmConfigUpdateRequest(BaseModel):
+    active_provider: str
+    openai: LlmProviderConfig
+    anthropic: LlmProviderConfig
+    gemini: LlmProviderConfig
+
+
 class PlayerPortalAccessRequest(BaseModel):
     session_key: str = SESSION_KEY_DEFAULT
     nation_id: str
@@ -165,6 +180,10 @@ def _army_can_enter(unit_type: str, province_id: str) -> bool:
     if unit_type == "Army":
         return province_type in {"land", "coast"}
     return province_type in {"coast", "sea"}
+
+
+def _province_can_be_owned(province_id: str) -> bool:
+    return PROVINCES.get(province_id, {}).get("type") in {"land", "coast"}
 
 
 def _default_governance_state() -> Dict[str, Any]:
@@ -244,7 +263,7 @@ def _normalize_session_map_state(
     for province_id, owner in ownership.items():
         normalized_id = _normalize_province_id(province_id)
         if normalized_id and normalized_id in PROVINCES:
-            normalized_ownership[normalized_id] = owner or ""
+            normalized_ownership[normalized_id] = (owner or "") if _province_can_be_owned(normalized_id) else ""
 
     normalized_units: List[Dict[str, Any]] = []
     seen_units: set[tuple[str, str]] = set()
@@ -695,6 +714,13 @@ def _session_state(session: Any) -> Dict[str, Any]:
         json.loads(session.last_orders_json or "{}"),
         json.loads(session.pending_retreats_json or "[]"),
     )
+    if session.status == "preparing":
+        opening_ownership, opening_units, opening_sc_count = initial_board()
+        normalized_map_state["ownership"] = opening_ownership
+        normalized_map_state["units"] = opening_units
+        normalized_map_state["sc_count"] = opening_sc_count
+        normalized_map_state["last_orders"] = {}
+        normalized_map_state["pending_retreats"] = []
     return {
         "id": session.id,
         "session_key": session.session_key,
@@ -916,16 +942,19 @@ async def _load_reports(db: AsyncSession, session_key: str):
     return await War_reportsService(db).list_by_field("session_key", session_key, skip=0, limit=1000)
 
 
-def _get_game_llm_models() -> List[str]:
-    models: List[str] = []
-    try:
-        configured = settings.game_llm_model
-    except AttributeError:
-        configured = DEFAULT_GAME_LLM_MODEL
-    for model in (configured, DEFAULT_GAME_LLM_MODEL, FALLBACK_GAME_LLM_MODEL):
-        if model and model not in models:
-            models.append(model)
-    return models
+def _current_game_llm_config() -> Tuple[str, Dict[str, str], Dict[str, Any]]:
+    provider, provider_config, full_config = active_llm_runtime_config()
+    if provider == "openai":
+        models: List[str] = []
+        configured = provider_config.get("model") or settings.game_llm_model or DEFAULT_GAME_LLM_MODEL
+        for model in (configured, settings.game_llm_model, DEFAULT_GAME_LLM_MODEL, FALLBACK_GAME_LLM_MODEL):
+            value = str(model or "").strip()
+            if value and value not in models:
+                models.append(value)
+        provider_config["models"] = models
+    else:
+        provider_config["models"] = [provider_config.get("model") or ""]
+    return provider, provider_config, full_config
 
 
 def _build_situation(state: Dict[str, Any]) -> str:
@@ -1944,10 +1973,7 @@ def _betrayal_opportunities(
     opportunities: List[Dict[str, Any]] = []
     for unit in _units_of(state, nation_id):
         for province_id in PROVINCES.get(unit["location"], {}).get("adj", []):
-            province_type = PROVINCES[province_id]["type"]
-            if unit["type"] == "Army" and province_type == "sea":
-                continue
-            if unit["type"] == "Fleet" and province_type == "land":
+            if not _army_can_enter(unit["type"], province_id):
                 continue
             owner = state["ownership"].get(province_id, "") or ""
             if owner not in allies:
@@ -2044,34 +2070,142 @@ async def _chat_json(
     payload: Dict[str, Any],
     max_tokens: int = 1800,
 ) -> Dict[str, Any]:
-    client: AsyncOpenAI = service._require_ai_client()
+    provider, provider_config, _ = _current_game_llm_config()
+    user_payload = json.dumps(payload, ensure_ascii=False)
     last_error: Optional[str] = None
-    for model in _get_game_llm_models():
-        try:
-            response = await client.chat.completions.create(
-                model=model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
-                ],
-                response_format={"type": "json_object"},
-                extra_body={"thinking": {"type": "disabled"}},
-                temperature=0.2,
-                max_tokens=max_tokens,
-                stream=False,
-            )
-            raw = _message_content_or_empty(response.choices[0].message)
-            if not raw:
-                last_error = f"{model} returned empty content"
+
+    if provider == "openai":
+        api_key = str(provider_config.get("api_key") or "").strip()
+        base_url = str(provider_config.get("base_url") or "").strip()
+        if not api_key:
+            raise RuntimeError("OpenAI provider is missing API key.")
+        client_kwargs: Dict[str, Any] = {"api_key": api_key}
+        if base_url:
+            client_kwargs["base_url"] = base_url.rstrip("/")
+        client: AsyncOpenAI = AsyncOpenAI(**client_kwargs)
+        for model in provider_config.get("models") or []:
+            model_name = str(model or "").strip()
+            if not model_name:
                 continue
-            parsed = json.loads(_extract_json_block(raw))
-            if isinstance(parsed, dict):
-                return parsed
-            last_error = f"{model} returned non-object JSON"
+            try:
+                response = await client.chat.completions.create(
+                    model=model_name,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_payload},
+                    ],
+                    response_format={"type": "json_object"},
+                    extra_body={"thinking": {"type": "disabled"}},
+                    temperature=0.2,
+                    max_tokens=max_tokens,
+                    stream=False,
+                )
+                raw = _message_content_or_empty(response.choices[0].message)
+                if not raw:
+                    last_error = f"{model_name} returned empty content"
+                    continue
+                parsed = json.loads(_extract_json_block(raw))
+                if isinstance(parsed, dict):
+                    return parsed
+                last_error = f"{model_name} returned non-object JSON"
+            except Exception as exc:  # noqa: BLE001
+                last_error = f"{model_name} failed: {exc}"
+                logger.error("LLM JSON call failed with %s: %s", model_name, exc)
+        raise RuntimeError(last_error or "OpenAI-compatible JSON call failed")
+
+    if provider == "anthropic":
+        api_key = str(provider_config.get("api_key") or "").strip()
+        base_url = str(provider_config.get("base_url") or "https://api.anthropic.com").strip().rstrip("/")
+        model_name = str(provider_config.get("model") or "").strip()
+        if not api_key:
+            raise RuntimeError("Anthropic provider is missing API key.")
+        if not model_name:
+            raise RuntimeError("Anthropic provider is missing model.")
+        try:
+            async with httpx.AsyncClient(timeout=120, trust_env=False) as client:
+                response = await client.post(
+                    f"{base_url}/v1/messages",
+                    headers={
+                        "x-api-key": api_key,
+                        "anthropic-version": "2023-06-01",
+                        "content-type": "application/json",
+                    },
+                    json={
+                        "model": model_name,
+                        "max_tokens": max_tokens,
+                        "temperature": 0.2,
+                        "system": f"{system_prompt}\nReturn a single valid JSON object and nothing else.",
+                        "messages": [
+                            {
+                                "role": "user",
+                                "content": [{"type": "text", "text": user_payload}],
+                            }
+                        ],
+                    },
+                )
+                response.raise_for_status()
+                body = response.json()
+                text_parts = [
+                    item.get("text", "")
+                    for item in body.get("content", [])
+                    if isinstance(item, dict) and item.get("type") == "text"
+                ]
+                raw = "\n".join(part for part in text_parts if part)
+                parsed = json.loads(_extract_json_block(raw))
+                if isinstance(parsed, dict):
+                    return parsed
+                raise RuntimeError(f"{model_name} returned non-object JSON")
         except Exception as exc:  # noqa: BLE001
-            last_error = f"{model} failed: {exc}"
-            logger.error("LLM JSON call failed with %s: %s", model, exc)
-    raise RuntimeError(last_error or "LLM JSON call failed")
+            logger.error("Anthropic JSON call failed with %s: %s", model_name, exc)
+            raise RuntimeError(f"{model_name} failed: {exc}") from exc
+
+    if provider == "gemini":
+        api_key = str(provider_config.get("api_key") or "").strip()
+        base_url = str(provider_config.get("base_url") or "https://generativelanguage.googleapis.com").strip().rstrip("/")
+        model_name = str(provider_config.get("model") or "").strip()
+        if not api_key:
+            raise RuntimeError("Gemini provider is missing API key.")
+        if not model_name:
+            raise RuntimeError("Gemini provider is missing model.")
+        try:
+            async with httpx.AsyncClient(timeout=120, trust_env=False) as client:
+                response = await client.post(
+                    f"{base_url}/v1beta/models/{model_name}:generateContent",
+                    params={"key": api_key},
+                    json={
+                        "systemInstruction": {"parts": [{"text": system_prompt}]},
+                        "contents": [{"role": "user", "parts": [{"text": user_payload}]}],
+                        "generationConfig": {
+                            "temperature": 0.2,
+                            "maxOutputTokens": max_tokens,
+                            "responseMimeType": "application/json",
+                        },
+                    },
+                )
+                response.raise_for_status()
+                body = response.json()
+                candidates = body.get("candidates", [])
+                parts = []
+                if candidates:
+                    parts = (
+                        candidates[0]
+                        .get("content", {})
+                        .get("parts", [])
+                    )
+                raw = "\n".join(
+                    str(item.get("text", ""))
+                    for item in parts
+                    if isinstance(item, dict) and item.get("text")
+                )
+                parsed = json.loads(_extract_json_block(raw))
+                if isinstance(parsed, dict):
+                    return parsed
+                raise RuntimeError(f"{model_name} returned non-object JSON")
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Gemini JSON call failed with %s: %s", model_name, exc)
+            raise RuntimeError(f"{model_name} failed: {exc}") from exc
+
+    raise RuntimeError(f"Unsupported LLM provider: {provider}")
 
 
 async def _llm_negotiate(
@@ -2158,10 +2292,7 @@ def _build_unit_options(state: Dict[str, Any], nation_id: str) -> List[Dict[str,
         unit_type = unit["type"]
         legal_moves: List[str] = []
         for province_id in PROVINCES.get(location, {}).get("adj", []):
-            province_type = PROVINCES[province_id]["type"]
-            if unit_type == "Army" and province_type != "sea":
-                legal_moves.append(province_id)
-            elif unit_type == "Fleet" and province_type != "land":
+            if _army_can_enter(unit_type, province_id):
                 legal_moves.append(province_id)
         options.append(
             {
@@ -2236,10 +2367,7 @@ def _best_proactive_target(
 ) -> str:
     legal_moves: List[str] = []
     for province_id in PROVINCES.get(unit["location"], {}).get("adj", []):
-        province_type = PROVINCES[province_id]["type"]
-        if unit["type"] == "Army" and province_type == "sea":
-            continue
-        if unit["type"] == "Fleet" and province_type == "land":
+        if not _army_can_enter(unit["type"], province_id):
             continue
         if province_id in claimed_targets:
             continue
@@ -2310,10 +2438,7 @@ def _strategic_priorities(state: Dict[str, Any], nation_id: str) -> Dict[str, An
     for unit in _units_of(state, nation_id):
         ranked_moves: List[Dict[str, Any]] = []
         for province_id in PROVINCES.get(unit["location"], {}).get("adj", []):
-            province_type = PROVINCES[province_id]["type"]
-            if unit["type"] == "Army" and province_type == "sea":
-                continue
-            if unit["type"] == "Fleet" and province_type == "land":
+            if not _army_can_enter(unit["type"], province_id):
                 continue
             ranked_moves.append(
                 {
@@ -2933,6 +3058,18 @@ async def update_match_config(data: MatchConfigUpdateRequest, db: AsyncSession =
         },
     )
     return {"ok": True, "state": next_state}
+
+
+@router.get("/llm_config")
+async def get_llm_config():
+    config = load_llm_runtime_config()
+    return {"ok": True, "config": config}
+
+
+@router.post("/llm_config")
+async def update_llm_config(data: LlmConfigUpdateRequest):
+    config = save_llm_runtime_config(data.model_dump())
+    return {"ok": True, "config": config}
 
 
 @router.get("/state")

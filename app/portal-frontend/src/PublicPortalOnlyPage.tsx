@@ -7,7 +7,7 @@ import { buildSpectatorGameState } from '@/game/spectator';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 
-const PUBLIC_PORTAL_PASSWORD = '666666';
+const PUBLIC_PORTAL_PASSWORD = '19392026';
 const PUBLIC_PORTAL_STORAGE_KEY = 'portal-public-access-granted';
 
 const PublicPortalOnlyPage: React.FC = () => {

@@ -16,6 +16,7 @@ import fitz
 from core.config import settings
 import httpx
 from openai import AsyncOpenAI
+from services.llm_runtime_config import openai_runtime_config
 from schemas.aihub import AnalyzePdfRequest, AnalyzePdfResponse
 from schemas.aihub import (
     GenAudioRequest,
@@ -90,11 +91,18 @@ class AIHubService:
 
     def __init__(self):
         self.client: Optional[AsyncOpenAI] = None
-        if settings.app_ai_base_url and settings.app_ai_key:
+        runtime = openai_runtime_config()
+        api_key = runtime.get("api_key") or settings.app_ai_key
+        base_url = runtime.get("base_url") or settings.app_ai_base_url
+        if api_key:
+            client_kwargs = {
+                "api_key": api_key,
+                "http_client": httpx.AsyncClient(trust_env=False),
+            }
+            if base_url:
+                client_kwargs["base_url"] = base_url.rstrip("/")
             self.client = AsyncOpenAI(
-                api_key=settings.app_ai_key,
-                base_url=settings.app_ai_base_url.rstrip("/"),
-                http_client=httpx.AsyncClient(trust_env=False),
+                **client_kwargs,
             )
 
     def _require_ai_client(self) -> AsyncOpenAI:

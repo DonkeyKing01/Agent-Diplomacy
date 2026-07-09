@@ -299,6 +299,20 @@ export interface SpectatorNetworkInfoResponse {
   candidates: SpectatorNetworkCandidate[];
 }
 
+export interface LlmProviderConfig {
+  api_key: string;
+  base_url: string;
+  model: string;
+}
+
+export interface LlmRuntimeConfig {
+  active_provider: 'openai' | 'anthropic' | 'gemini';
+  openai: LlmProviderConfig;
+  anthropic: LlmProviderConfig;
+  gemini: LlmProviderConfig;
+  updated_at?: string | null;
+}
+
 export interface PortalSnapshotBundle {
   version: 1;
   exported_at: string;
@@ -391,6 +405,14 @@ export async function startPreparedGame(): Promise<{ ok: boolean; state: Backend
 
 export async function updateMatchConfig(payload: { max_year?: number }): Promise<{ ok: boolean; state: BackendState }> {
   return invoke('/config', 'POST', { session_key: SESSION_KEY, ...payload });
+}
+
+export async function fetchLlmConfig(): Promise<{ ok: boolean; config: LlmRuntimeConfig }> {
+  return invoke('/llm_config', 'GET', {}, 30_000);
+}
+
+export async function updateLlmConfig(payload: LlmRuntimeConfig): Promise<{ ok: boolean; config: LlmRuntimeConfig }> {
+  return invoke('/llm_config', 'POST', payload, 30_000);
 }
 
 export async function advancePhase(): Promise<{ exists: boolean; state: BackendState }> {

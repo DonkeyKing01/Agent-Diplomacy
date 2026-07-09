@@ -1,15 +1,27 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Crown, Loader2, Radio, ScrollText, Swords } from 'lucide-react';
+import { Crown, KeyRound, Loader2, Radio, ScrollText, Swords } from 'lucide-react';
 import StrategicMap from '@/components/StrategicMap';
 import BattleReportPanel from '@/components/BattleReportPanel';
 import { fetchPortalSnapshotBundle, fetchSpectatorPublic, SpectatorPublicState } from '@/game/api';
 import { buildSpectatorGameState } from '@/game/spectator';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+
+const PUBLIC_PORTAL_PASSWORD = '19392026';
+const PUBLIC_PORTAL_STORAGE_KEY = 'local-public-portal-access-granted';
 
 const PublicPortalPage: React.FC = () => {
   const [data, setData] = useState<SpectatorPublicState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [mode, setMode] = useState<'live' | 'snapshot'>('live');
+  const [accessCode, setAccessCode] = useState('');
+  const [unlocked, setUnlocked] = useState(() => {
+    if (typeof window === 'undefined') {
+      return false;
+    }
+    return window.sessionStorage.getItem(PUBLIC_PORTAL_STORAGE_KEY) === 'true';
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -82,6 +94,56 @@ const PublicPortalPage: React.FC = () => {
 
   if (!data || !mapState) {
     return null;
+  }
+
+  if (!unlocked) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background p-6 text-foreground">
+        <div className="w-full max-w-md rounded-2xl border border-border bg-card p-6">
+          <div className="mb-5">
+            <div className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Agent Diplomacy Public Portal</div>
+            <h1 className="mt-2 font-display text-2xl font-bold">公共局势页</h1>
+            <div className="mt-2 text-sm text-muted-foreground">请输入公共页访问密码</div>
+          </div>
+
+          <div className="space-y-3">
+            <Input
+              type="password"
+              value={accessCode}
+              onChange={(event) => setAccessCode(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  if (accessCode.trim() !== PUBLIC_PORTAL_PASSWORD) {
+                    setError('公共页访问密码错误');
+                    return;
+                  }
+                  setUnlocked(true);
+                  setError(null);
+                  window.sessionStorage.setItem(PUBLIC_PORTAL_STORAGE_KEY, 'true');
+                }
+              }}
+              placeholder="公共页密码"
+            />
+            {error ? <div className="text-sm text-destructive">{error}</div> : null}
+            <Button
+              onClick={() => {
+                if (accessCode.trim() !== PUBLIC_PORTAL_PASSWORD) {
+                  setError('公共页访问密码错误');
+                  return;
+                }
+                setUnlocked(true);
+                setError(null);
+                window.sessionStorage.setItem(PUBLIC_PORTAL_STORAGE_KEY, 'true');
+              }}
+              className="w-full"
+            >
+              <KeyRound className="mr-2 h-4 w-4" />
+              进入公共页
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   const rankings = [...data.nations].sort((a, b) => (data.scCount[b.id] || 0) - (data.scCount[a.id] || 0));
