@@ -474,6 +474,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     try {
       await apiUpdateAgent(payload);
+      await refresh();
     } catch (error) {
       if (previousNation) {
         setState((previous) => ({
@@ -485,7 +486,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setError(message);
       throw new Error(message);
     }
-  }, []);
+  }, [refresh]);
 
   const updateMatchConfig = useCallback(async (patch: { maxYear?: number }) => {
     try {

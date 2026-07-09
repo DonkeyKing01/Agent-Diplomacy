@@ -101,9 +101,6 @@ const AgentSettingsPanel: React.FC = () => {
     }
   }, [selectedId, selected]);
 
-  const annualAdviceYears = state.governance.annual_advice_updated_years_by_nation || {};
-  const nationAdviceYears = annualAdviceYears[draft.id] || [];
-  const annualAdviceUsedThisYear = nationAdviceYears.includes(state.year);
   const isEliminated = (state.scCount[draft.id] || 0) <= 0;
   const systemPromptUpdatedNations = state.governance.system_prompt_updated_nations || [];
   const skillsUpdatedNations = state.governance.skills_updated_nations || [];
@@ -124,7 +121,7 @@ const AgentSettingsPanel: React.FC = () => {
       return '开局准备中：必须写入 System Prompt / Skills / 本年年度建议';
     }
     if (inReview) {
-      return '年度复盘中：年度建议必写；System Prompt / Skills 各有一次赛后修改机会';
+      return '年度复盘中：可反复调整本国下一年年度建议，推进到下一阶段后锁定';
     }
     return '当前阶段仅可查看，治理修改已锁定';
   }, [inPreparing, inReview, isEliminated]);
@@ -208,7 +205,10 @@ const AgentSettingsPanel: React.FC = () => {
         return;
       }
       toast.success('本地模板同步完成', {
-        description: `已更新 ${result.summary.nations_with_updates} 个国家、${result.summary.field_updates} 个字段。目录：${LOCAL_TEMPLATE_ROOT_HINT}`,
+        description:
+          `读取年度：${result.template_year ?? result.year}；` +
+          `已更新 ${result.summary.nations_with_updates} 个国家、${result.summary.field_updates} 个字段；` +
+          `未变化 ${result.summary.skipped_unchanged_fields} 项，空白跳过 ${result.summary.skipped_empty_fields} 项。目录：${LOCAL_TEMPLATE_ROOT_HINT}`,
       });
     } catch (error) {
       toast.error('本地模板同步失败', {
@@ -306,7 +306,7 @@ const AgentSettingsPanel: React.FC = () => {
                   固定目录：<span className="font-mono text-foreground">{LOCAL_TEMPLATE_ROOT_HINT}</span>
                 </div>
                 <div>准备阶段：读取 `preparing/system_prompt/`、`preparing/skills/` 与 `yearly_advice/{state.year}/`。</div>
-                <div>年度复盘：只读取 `yearly_advice/{state.year}/`。</div>
+                <div>年度复盘：读取下一年目录 `yearly_advice/{state.year + 1}/`。</div>
                 <div>空文件会被跳过，不覆盖数据库中的现有内容。</div>
                 <div>当前先预建 1901-1915 共 15 年模板，超过范围的年度建议会自动跳过。</div>
               </div>
@@ -325,8 +325,9 @@ const AgentSettingsPanel: React.FC = () => {
                 <div>本排 Skills.md 赛后修改机会：{skillsChanceUsed ? '已使用' : '未使用'} / 1</div>
                 <div>System Prompt 与 Skills.md 开局准备阶段必须写入；开局后每个排各只有一次修改机会。</div>
                 <div>System Prompt / Skills.md / 年度建议 均不再限制文本长度。</div>
-                <div>年度复盘阶段必须为所有未灭国排写入年度建议，否则无法推进到下一年。</div>
-                <div>本年年度建议：{annualAdviceUsedThisYear ? '本年额度已使用' : '本年还可修改 1 次'}</div>
+                <div>年度建议不改时默认沿用上一份；只有实际改动后，才算该国该年的治理更新。</div>
+                <div>准备阶段填写的是当前年建议；年度复盘阶段填写的是下一年建议。</div>
+                <div>在当前可编辑阶段内可以反复读取和重写，只有推进到下一阶段后才锁定。</div>
                 <div>Memory 为锁定历史层，只读展示，不可手动编辑。</div>
                 {isEliminated ? <div>该国已灭国：不会再参与推理、行动或冬季复活。</div> : null}
               </div>

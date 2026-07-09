@@ -212,12 +212,16 @@ export interface BackendLocalTemplateSyncResult {
   template_root: string;
   mode: 'preparing' | 'review';
   year: number;
+  template_year?: number;
   year_supported: boolean;
   scaffolded_files: number;
   applied: BackendLocalTemplateSyncNationResult[];
   summary: {
+    nations_scanned: number;
     nations_with_updates: number;
     field_updates: number;
+    skipped_unchanged_fields: number;
+    skipped_empty_fields: number;
     error_count: number;
   };
   state?: BackendState;

@@ -380,14 +380,6 @@ def _record_annual_advice_update(governance: Dict[str, Any], nation_id: str, yea
     governance["annual_advice_updated_years"] = sorted(aggregate_years)
 
 
-def _missing_annual_advice_nations(governance: Dict[str, Any], active_nations: List[str], year: int) -> List[str]:
-    return [
-        nation_id
-        for nation_id in active_nations
-        if int(year) not in set(_annual_advice_years_for_nation(governance, nation_id))
-    ]
-
-
 def _require_non_empty_profile_text(label: str, value: str) -> str:
     text = (value or "").strip()
     if not text:
@@ -686,17 +678,6 @@ def _build_agent_update(
     annual_advice_value = incoming.get("annual_advice")
     if annual_advice_value is not None and annual_advice_value != (target.annual_advice or ""):
         _require_non_empty_profile_text("Yearly advice", annual_advice_value)
-        used_years = set(_annual_advice_years_for_nation(next_governance, nation_id))
-        if session.year in used_years:
-            if session.status == "preparing":
-                raise HTTPException(
-                    status_code=400,
-                    detail="Yearly advice can only be updated once during the preparation stage for the current year.",
-                )
-            raise HTTPException(
-                status_code=400,
-                detail="Yearly advice can only be updated once per nation during each annual review.",
-            )
         update["annual_advice"] = annual_advice_value
         _record_annual_advice_update(next_governance, nation_id, session.year)
         effective_years = next_governance.get("annual_advice_effective_years", {})
@@ -3308,15 +3289,6 @@ async def advance_phase(data: AdvanceRequest, db: AsyncSession = Depends(get_db)
     pending_retreats = state.get("pendingRetreats", [])
     governance = _normalize_governance_state(state.get("governance"))
     eliminated_nations = _eliminated_nations(governance)
-    if phase["key"] == "review":
-        active_nations_for_review = [nation_id for nation_id in NATION_IDS if nation_id not in eliminated_nations]
-        missing_advice = _missing_annual_advice_nations(governance, active_nations_for_review, year)
-        if missing_advice:
-            raise HTTPException(
-                status_code=400,
-                detail="年度复盘推进前必须为所有未灭国排写入年度建议。缺失："
-                + "、".join(nation_name(nation_id) for nation_id in missing_advice),
-            )
     append_game_log(
         session_key,
         "phase_advance_started",
@@ -3785,7 +3757,8 @@ async def sync_local_templates(data: LocalTemplateSyncRequest, db: AsyncSession 
     rows = await service.list_by_field("session_key", session_key, skip=0, limit=100)
     agents_by_nation = {row.nation_id: row for row in rows}
 
-    sync_year_supported = _template_year_supported(session.year)
+    template_year = session.year if sync_mode == "preparing" else session.year + 1
+    sync_year_supported = _template_year_supported(template_year)
     applied: List[Dict[str, Any]] = []
 
     for nation in LOCAL_TEMPLATE_NATION_FILES:
@@ -3834,7 +3807,7 @@ async def sync_local_templates(data: LocalTemplateSyncRequest, db: AsyncSession 
                     incoming[field_name] = content
 
         if sync_year_supported:
-            advice_path = _template_file_for(nation_id, "annual_advice", session.year)
+            advice_path = _template_file_for(nation_id, "annual_advice", template_year)
             advice_content = advice_path.read_text(encoding="utf-8")
             if not advice_content.strip():
                 skipped_empty_fields.append("annual_advice")
@@ -3896,6 +3869,7 @@ async def sync_local_templates(data: LocalTemplateSyncRequest, db: AsyncSession 
         {
             "mode": sync_mode,
             "year": session.year,
+            "template_year": template_year,
             "template_root": str(LOCAL_TEMPLATE_ROOT),
             "scaffolded_files": scaffolded_files,
             "results": applied,
@@ -3905,17 +3879,23 @@ async def sync_local_templates(data: LocalTemplateSyncRequest, db: AsyncSession 
     state_payload = await get_state(session_key=session_key, db=db)
     applied_count = sum(len(item["applied_fields"]) for item in applied)
     error_count = sum(1 for item in applied if item["errors"])
+    skipped_unchanged_count = sum(len(item["skipped_unchanged_fields"]) for item in applied)
+    skipped_empty_count = sum(len(item["skipped_empty_fields"]) for item in applied)
     return {
         "ok": True,
         "template_root": str(LOCAL_TEMPLATE_ROOT),
         "mode": sync_mode,
         "year": session.year,
+        "template_year": template_year,
         "year_supported": sync_year_supported,
         "scaffolded_files": scaffolded_files,
         "applied": applied,
         "summary": {
+            "nations_scanned": len(applied),
             "nations_with_updates": sum(1 for item in applied if item["applied_fields"]),
             "field_updates": applied_count,
+            "skipped_unchanged_fields": skipped_unchanged_count,
+            "skipped_empty_fields": skipped_empty_count,
             "error_count": error_count,
         },
         "state": state_payload.get("state") if isinstance(state_payload, dict) else None,
