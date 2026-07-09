@@ -11,12 +11,14 @@ import {
   createInitialState,
 } from './engine';
 import {
+  BackendLocalTemplateSyncResult,
   BackendState,
   advancePhase as apiAdvance,
   adjustSc as apiAdjustSc,
   fetchState,
   initGame,
   startPreparedGame as apiStartPreparedGame,
+  syncLocalTemplates as apiSyncLocalTemplates,
   updateMatchConfig as apiUpdateMatchConfig,
   updateAgent as apiUpdateAgent,
 } from './api';
@@ -312,6 +314,7 @@ interface GameContextValue {
   setEndowment: (nationId: string, value: number) => Promise<void>;
   updateMatchConfig: (patch: { maxYear?: number }) => Promise<void>;
   updateNation: (nationId: string, patch: Partial<Nation>) => Promise<void>;
+  syncLocalTemplates: () => Promise<BackendLocalTemplateSyncResult>;
   settingsOpen: boolean;
   settingsSource: SettingsSource;
   focusNation: string | null;
@@ -499,6 +502,22 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, [applyBackend]);
 
+  const syncLocalTemplates = useCallback(async () => {
+    try {
+      const result = await apiSyncLocalTemplates();
+      if (result.state) {
+        applyBackend(result.state);
+      } else {
+        await refresh();
+      }
+      return result;
+    } catch (error) {
+      const message = (error as { message?: string })?.message || 'Failed to sync local templates';
+      setError(message);
+      throw new Error(message);
+    }
+  }, [applyBackend, refresh]);
+
   const openSettings = useCallback((source: SettingsSource, nationId?: string) => {
     setSettingsSource(source);
     setFocusNation(nationId || null);
@@ -522,6 +541,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setEndowment,
       updateMatchConfig,
       updateNation,
+      syncLocalTemplates,
       settingsOpen,
       settingsSource,
       focusNation,
@@ -542,6 +562,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setEndowment,
       updateMatchConfig,
       updateNation,
+      syncLocalTemplates,
       settingsOpen,
       settingsSource,
       focusNation,

@@ -1,16 +1,14 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import JSZip from 'jszip';
 import {
   ArrowLeft,
-  FileArchive,
   Flag,
   Mail,
+  RefreshCw,
   Save,
   ScrollText,
   ShieldAlert,
   Undo2,
-  UploadCloud,
   Waypoints,
 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -46,13 +44,7 @@ const FIELD_HINT: { key: keyof Nation; label: string; description: string; rows:
   { key: 'yearlyAdvice', label: '本年年度建议', description: '当前年或下一年生效的策略补丁。', rows: 3 },
 ];
 
-type MarkdownImportKind = 'systemPrompt' | 'skills' | 'yearlyAdvice';
-
-const IMPORT_LABEL: Record<MarkdownImportKind, string> = {
-  systemPrompt: 'System Prompt',
-  skills: 'Skills.md',
-  yearlyAdvice: '年度建议',
-};
+const LOCAL_TEMPLATE_ROOT_HINT = 'docs/governance_templates';
 
 function cloneNation(nation: Nation): Nation {
   return JSON.parse(JSON.stringify(nation)) as Nation;
@@ -84,89 +76,9 @@ function parseMemorySections(memory: string) {
   return { updateLine, sections };
 }
 
-function normalizeImportLabel(value: string) {
-  return value
-    .replace(/\.[^.]+$/, '')
-    .replace(/[_\-—–]+/g, '')
-    .replace(/\s+/g, '')
-    .replace(/领地|国家|智能体|agent|Agent|systemprompt|SystemPrompt|skillsmd|Skillsmd|年度建议/g, '')
-    .toLowerCase();
-}
-
-function matchNationByLabel(label: string, nations: Nation[]) {
-  const normalizedLabel = normalizeImportLabel(label);
-  return nations.find((nation, index) => {
-    const candidates = [
-      nation.id,
-      nation.name,
-      nation.short,
-      nation.name.replace(/领地/g, ''),
-      `${index + 1}排`,
-      `第${index + 1}排`,
-    ];
-    return candidates.some((candidate) => normalizeImportLabel(candidate) === normalizedLabel);
-  });
-}
-
-function parseHeadingBlocks(markdown: string, nations: Nation[]) {
-  const blocks: Record<string, string[]> = {};
-  let currentNationId: string | null = null;
-
-  for (const line of markdown.split(/\r?\n/)) {
-    const heading = line.match(/^#{1,4}\s+(.+?)\s*$/);
-    if (heading) {
-      const nation = matchNationByLabel(heading[1], nations);
-      if (nation) {
-        currentNationId = nation.id;
-        blocks[currentNationId] = [];
-        continue;
-      }
-    }
-    if (currentNationId) {
-      blocks[currentNationId].push(line);
-    }
-  }
-
-  return Object.fromEntries(
-    Object.entries(blocks)
-      .map(([nationId, lines]) => [nationId, lines.join('\n').trim()])
-      .filter(([, content]) => content),
-  ) as Record<string, string>;
-}
-
-async function parseMarkdownZip(file: File, nations: Nation[]) {
-  const zip = await JSZip.loadAsync(file);
-  const mapped: Record<string, string> = {};
-  const unmatchedFiles: string[] = [];
-  const entries = Object.values(zip.files).filter((entry) => !entry.dir && entry.name.toLowerCase().endsWith('.md'));
-
-  for (const entry of entries) {
-    const content = (await entry.async('string')).trim();
-    if (!content) continue;
-
-    const fileBase = entry.name.split('/').pop() || entry.name;
-    const nation = matchNationByLabel(fileBase, nations);
-    if (nation) {
-      mapped[nation.id] = content;
-      continue;
-    }
-
-    const headingBlocks = parseHeadingBlocks(content, nations);
-    if (Object.keys(headingBlocks).length) {
-      Object.assign(mapped, headingBlocks);
-      continue;
-    }
-
-    unmatchedFiles.push(entry.name);
-  }
-
-  return { mapped, unmatchedFiles, markdownCount: entries.length };
-}
-
 const AgentSettingsPanel: React.FC = () => {
-  const { state, ready, settingsSource, focusNation, closeSettings, updateNation, refresh } = useGame();
+  const { state, ready, settingsSource, focusNation, closeSettings, updateNation, syncLocalTemplates } = useGame();
   const navigate = useNavigate();
-  const importInputRef = useRef<HTMLInputElement | null>(null);
 
   const inPreparing = ready && state.status === 'preparing';
   const inReview = ready && phaseAt(state.phaseIndex).key === 'review' && state.status !== 'finished';
@@ -175,8 +87,7 @@ const AgentSettingsPanel: React.FC = () => {
   const [selectedId, setSelectedId] = useState<string>(selectedFromState);
   const selected = state.nations.find((nation) => nation.id === selectedId) || state.nations[0];
   const [draft, setDraft] = useState<Nation>(() => cloneNation(selected || state.nations[0]));
-  const [importKind, setImportKind] = useState<MarkdownImportKind>('systemPrompt');
-  const [importing, setImporting] = useState(false);
+  const [syncingTemplates, setSyncingTemplates] = useState(false);
 
   useEffect(() => {
     if (focusNation && focusNation !== selectedId) {
@@ -278,75 +189,33 @@ const AgentSettingsPanel: React.FC = () => {
     toast('已放弃本次未保存修改');
   };
 
-  const canImportKind = (kind: MarkdownImportKind) => {
-    if (kind === 'yearlyAdvice') return canEditAnnualAdvice;
-    return inPreparing || inReview;
-  };
-
-  const handleImportClick = (kind: MarkdownImportKind) => {
-    if (!canImportKind(kind)) {
-      toast.error(`${IMPORT_LABEL[kind]} 当前阶段不可导入`);
+  const handleLocalTemplateSync = async () => {
+    if (!inPreparing && !inReview) {
+      toast.error('当前阶段不可读取本地模板');
       return;
     }
-    setImportKind(kind);
-    if (importInputRef.current) {
-      importInputRef.current.value = '';
-      importInputRef.current.click();
-    }
-  };
-
-  const handleImportFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    setImporting(true);
+    setSyncingTemplates(true);
     try {
-      const { mapped, unmatchedFiles, markdownCount } = await parseMarkdownZip(file, state.nations);
-      const entries = Object.entries(mapped).filter(([, content]) => content.trim());
-      if (!markdownCount) {
-        toast.error('ZIP 内没有找到 Markdown 文件');
-        return;
-      }
-      if (!entries.length) {
-        toast.error('未能把 Markdown 映射到任何排', {
-          description: '文件名或标题请使用“一排”“一排领地”等名称。',
+      const result = await syncLocalTemplates();
+      const failed = result.applied.filter((item) => item.errors.length);
+      if (failed.length) {
+        toast.error('本地模板已部分同步', {
+          description: failed
+            .slice(0, 3)
+            .map((item) => `${item.nation_name}：${item.errors[0]}`)
+            .join('；'),
         });
         return;
       }
-
-      const failures: string[] = [];
-      for (const [nationId, content] of entries) {
-        try {
-          const patch: Partial<Nation> =
-            importKind === 'systemPrompt'
-              ? { systemPrompt: content }
-              : importKind === 'skills'
-                ? { skills: content }
-                : { yearlyAdvice: content };
-          await updateNation(nationId, patch);
-        } catch (error) {
-          const nation = state.nations.find((item) => item.id === nationId);
-          failures.push(`${nation?.name || nationId}：${(error as Error).message || '写入失败'}`);
-        }
-      }
-      await refresh();
-
-      if (failures.length) {
-        toast.error(`${IMPORT_LABEL[importKind]} 部分导入失败`, {
-          description: failures.slice(0, 3).join('；'),
-        });
-        return;
-      }
-
-      toast.success(`已导入 ${entries.length} 个排的 ${IMPORT_LABEL[importKind]}`, {
-        description: unmatchedFiles.length ? `有 ${unmatchedFiles.length} 个 Markdown 未匹配到排，已跳过。` : '内容已通过后端接口写入。',
+      toast.success('本地模板同步完成', {
+        description: `已更新 ${result.summary.nations_with_updates} 个国家、${result.summary.field_updates} 个字段。目录：${LOCAL_TEMPLATE_ROOT_HINT}`,
       });
     } catch (error) {
-      toast.error('ZIP 导入失败', {
-        description: (error as Error).message || '请确认上传的是有效 zip。',
+      toast.error('本地模板同步失败', {
+        description: (error as Error).message || '请检查后端状态与模板目录。',
       });
     } finally {
-      setImporting(false);
-      event.target.value = '';
+      setSyncingTemplates(false);
     }
   };
 
@@ -425,27 +294,27 @@ const AgentSettingsPanel: React.FC = () => {
             <section className="space-y-4 rounded-lg border border-border bg-card p-5">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
-                  <h3 className="font-display text-lg font-semibold">Markdown ZIP 批量导入</h3>
+                  <h3 className="font-display text-lg font-semibold">本地 Markdown 模板同步</h3>
                   <div className="mt-1 text-sm text-muted-foreground">
-                    支持按文件名或 Markdown 标题匹配每个排，导入会调用后端接口并写入真实智能体设置。
+                    直接编辑固定目录中的 Markdown 文件，然后点击刷新。后端会按当前阶段读取对应模板，并把非空内容写入真实智能体设置。
                   </div>
                 </div>
-                <FileArchive className="h-5 w-5 text-primary" />
+                <ScrollText className="h-5 w-5 text-primary" />
               </div>
-              <input ref={importInputRef} type="file" accept=".zip,application/zip" className="hidden" onChange={handleImportFile} />
+              <div className="rounded-md border border-border/70 bg-secondary/20 p-3 text-sm text-muted-foreground">
+                <div>
+                  固定目录：<span className="font-mono text-foreground">{LOCAL_TEMPLATE_ROOT_HINT}</span>
+                </div>
+                <div>准备阶段：读取 `preparing/system_prompt/`、`preparing/skills/` 与 `yearly_advice/{state.year}/`。</div>
+                <div>年度复盘：只读取 `yearly_advice/{state.year}/`。</div>
+                <div>空文件会被跳过，不覆盖数据库中的现有内容。</div>
+                <div>当前先预建 1901-1915 共 15 年模板，超过范围的年度建议会自动跳过。</div>
+              </div>
               <div className="flex flex-wrap gap-3">
-                {(['systemPrompt', 'skills', 'yearlyAdvice'] as MarkdownImportKind[]).map((kind) => (
-                  <Button
-                    key={kind}
-                    variant={kind === 'yearlyAdvice' ? 'default' : 'outline'}
-                    className={kind === 'yearlyAdvice' ? '' : 'bg-transparent hover:bg-secondary'}
-                    onClick={() => handleImportClick(kind)}
-                    disabled={importing || !canImportKind(kind)}
-                  >
-                    <UploadCloud className="mr-1.5 h-4 w-4" />
-                    {importing && importKind === kind ? '导入中' : `导入 ${IMPORT_LABEL[kind]} ZIP`}
-                  </Button>
-                ))}
+                <Button onClick={handleLocalTemplateSync} disabled={syncingTemplates || (!inPreparing && !inReview)}>
+                  <RefreshCw className="mr-1.5 h-4 w-4" />
+                  {syncingTemplates ? '读取中' : '刷新读取当前阶段模板'}
+                </Button>
               </div>
             </section>
 

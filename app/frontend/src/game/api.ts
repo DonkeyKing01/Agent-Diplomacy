@@ -1,4 +1,4 @@
-import { getAPIBaseURL } from '@/lib/config';
+import { getAPIBaseURL, getPortalSnapshotURL } from '@/lib/config';
 
 const SESSION_KEY = 'main';
 const getGameApiBase = () => `${getAPIBaseURL()}/api/v1/game`;
@@ -198,6 +198,121 @@ export interface BackendState {
   blackbox?: Record<string, BackendBlackboxNation>;
 }
 
+export interface BackendLocalTemplateSyncNationResult {
+  nation_id: string;
+  nation_name: string;
+  applied_fields: string[];
+  skipped_empty_fields: string[];
+  skipped_unchanged_fields: string[];
+  errors: string[];
+}
+
+export interface BackendLocalTemplateSyncResult {
+  ok: boolean;
+  template_root: string;
+  mode: 'preparing' | 'review';
+  year: number;
+  year_supported: boolean;
+  scaffolded_files: number;
+  applied: BackendLocalTemplateSyncNationResult[];
+  summary: {
+    nations_with_updates: number;
+    field_updates: number;
+    error_count: number;
+  };
+  state?: BackendState;
+}
+
+export interface SpectatorPublicState {
+  year: number;
+  phase_index: number;
+  phase_key: string;
+  phase_label: string;
+  season: string;
+  status: string;
+  engine: string;
+  ownership: Record<string, string>;
+  units: BackendUnit[];
+  scCount: Record<string, number>;
+  nations: Array<{ id: string; name: string; short: string; color: string; slot_label: string; player_path: string }>;
+  reports: BackendReport[];
+  history: BackendHistory[];
+  phaseSnapshots: BackendPhaseSnapshot[];
+  public_url: string;
+}
+
+export interface SpectatorPrivateState {
+  year: number;
+  phase_index: number;
+  phase_key: string;
+  phase_label: string;
+  season: string;
+  status: string;
+  nation: { id: string; name: string; short: string; color: string; sc: number; private_url: string };
+  map: {
+    ownership: Record<string, string>;
+    units: BackendUnit[];
+    scCount: Record<string, number>;
+    nations: Array<{ id: string; name: string; short: string; color: string }>;
+    reports: BackendReport[];
+    history: BackendHistory[];
+    phaseSnapshots: BackendPhaseSnapshot[];
+  };
+  agent_profile: {
+    system_prompt: string;
+    skills_md: string;
+    memory: string;
+    annual_advice: string;
+  };
+  messages: BackendMessage[];
+  reports: BackendReport[];
+  history: BackendHistory[];
+  blackbox: BackendBlackboxNation;
+}
+
+export interface SpectatorCredential {
+  nation_id: string;
+  nation_name: string;
+  slot_label: string;
+  filename: string;
+  password: string;
+  url: string;
+  nation_color: string;
+}
+
+export interface SpectatorCredentialsResponse {
+  ok: boolean;
+  public_url: string;
+  players: SpectatorCredential[];
+}
+
+export interface SpectatorNetworkCandidate {
+  ip: string;
+  source: string;
+  interface: string;
+}
+
+export interface SpectatorNetworkInfoResponse {
+  ok: boolean;
+  recommended_ip: string;
+  recommended_base_url: string;
+  candidates: SpectatorNetworkCandidate[];
+}
+
+export interface PortalSnapshotBundle {
+  version: 1;
+  exported_at: string;
+  source: 'agent-diplomacy-local';
+  public_state: SpectatorPublicState;
+  player_states: Record<
+    string,
+    {
+      password: string;
+      state: SpectatorPrivateState;
+    }
+  >;
+}
+
 function buildUrl(path: string, data: Record<string, unknown>): string {
   const url = new URL(`${getGameApiBase()}${path}`);
   Object.entries(data).forEach(([key, value]) => {
@@ -256,6 +371,12 @@ async function invoke<T>(
   }
 }
 
+function withSnapshotCacheBust(url: string): string {
+  const next = new URL(url, typeof window !== 'undefined' ? window.location.origin : 'http://127.0.0.1');
+  next.searchParams.set('_ts', String(Date.now()));
+  return next.toString();
+}
+
 export async function fetchState(): Promise<{ exists: boolean; state?: BackendState }> {
   return invoke('/state', 'GET', { session_key: SESSION_KEY });
 }
@@ -284,6 +405,47 @@ export async function updateAgent(payload: {
   annual_advice?: string;
 }): Promise<{ ok: boolean; agent: BackendAgent }> {
   return invoke('/agent', 'POST', { session_key: SESSION_KEY, ...payload });
+}
+
+export async function syncLocalTemplates(): Promise<BackendLocalTemplateSyncResult> {
+  return invoke('/local_templates/sync', 'POST', { session_key: SESSION_KEY }, 600_000);
+}
+
+export async function fetchSpectatorPublic(): Promise<{ ok: boolean; state: SpectatorPublicState }> {
+  return invoke('/spectator/public', 'GET', { session_key: SESSION_KEY }, 600_000);
+}
+
+export async function fetchSpectatorPrivate(payload: {
+  nation_id: string;
+  password: string;
+}): Promise<{ ok: boolean; state: SpectatorPrivateState }> {
+  return invoke('/spectator/player', 'POST', { session_key: SESSION_KEY, ...payload }, 600_000);
+}
+
+export async function fetchSpectatorCredentials(): Promise<SpectatorCredentialsResponse> {
+  return invoke('/spectator/credentials', 'GET', { session_key: SESSION_KEY }, 600_000);
+}
+
+export async function fetchSpectatorNetworkInfo(): Promise<SpectatorNetworkInfoResponse> {
+  return invoke('/spectator/network', 'GET', {}, 30_000);
+}
+
+export async function fetchPortalSnapshotBundle(snapshotUrl?: string): Promise<PortalSnapshotBundle> {
+  const target = snapshotUrl || getPortalSnapshotURL();
+  if (!target) {
+    throw new Error('未配置线上快照地址');
+  }
+  const response = await fetch(withSnapshotCacheBust(target), {
+    cache: 'no-store',
+    headers: {
+      'Cache-Control': 'no-cache, no-store, max-age=0',
+      Pragma: 'no-cache',
+    },
+  });
+  if (!response.ok) {
+    throw new Error(`Snapshot fetch failed: ${response.status} ${response.statusText}`);
+  }
+  return response.json() as Promise<PortalSnapshotBundle>;
 }
 
 export async function adjustSc(

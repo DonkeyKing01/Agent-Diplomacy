@@ -1,13 +1,18 @@
 """Agent Diplomacy game routes backed by the real database and a real LLM."""
 
 import asyncio
+import copy
 import difflib
 import json
 import logging
 import re
-from typing import Any, Dict, List, Optional
+import secrets
+import socket
+import subprocess
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from openai import AsyncOpenAI
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -49,6 +54,38 @@ router = APIRouter(prefix="/api/v1/game", tags=["game"])
 DEFAULT_GAME_LLM_MODEL = "deepseek-v4-flash"
 FALLBACK_GAME_LLM_MODEL = "deepseek-v4-pro"
 NEGOTIATION_ROUNDS = 2
+REPO_ROOT = Path(__file__).resolve().parents[3]
+LOCAL_TEMPLATE_ROOT = REPO_ROOT / "docs" / "governance_templates"
+PLAYER_PORTAL_PASSWORDS_PATH = REPO_ROOT / "docs" / "player_portal_passwords.json"
+LOCAL_TEMPLATE_PREPARING_ROOT = LOCAL_TEMPLATE_ROOT / "preparing"
+LOCAL_TEMPLATE_SYSTEM_ROOT = LOCAL_TEMPLATE_PREPARING_ROOT / "system_prompt"
+LOCAL_TEMPLATE_SKILLS_ROOT = LOCAL_TEMPLATE_PREPARING_ROOT / "skills"
+LOCAL_TEMPLATE_YEARLY_ROOT = LOCAL_TEMPLATE_ROOT / "yearly_advice"
+LOCAL_TEMPLATE_YEARS = list(range(START_YEAR, START_YEAR + 15))
+LOCAL_TEMPLATE_SLOT_LABELS = [
+    "第一排",
+    "第二排",
+    "第三排",
+    "第四排",
+    "第五排",
+    "第六排",
+    "第七排",
+    "第八排",
+    "第九排",
+    "第十排",
+]
+LOCAL_TEMPLATE_NATION_FILES = [
+    {
+        "nation_id": nation["id"],
+        "nation_name": nation["name"],
+        "slot_label": LOCAL_TEMPLATE_SLOT_LABELS[index - 1],
+        "filename": f"{index:02d}_{LOCAL_TEMPLATE_SLOT_LABELS[index - 1]}.md",
+    }
+    for index, nation in enumerate(NATIONS, start=1)
+]
+LOCAL_TEMPLATE_FILENAME_BY_NATION = {
+    item["nation_id"]: item["filename"] for item in LOCAL_TEMPLATE_NATION_FILES
+}
 
 
 class InitRequest(BaseModel):
@@ -86,6 +123,16 @@ class ScAdjustItem(BaseModel):
 class ScAdjustRequest(BaseModel):
     session_key: str = SESSION_KEY_DEFAULT
     endowments: List[ScAdjustItem]
+
+
+class LocalTemplateSyncRequest(BaseModel):
+    session_key: str = SESSION_KEY_DEFAULT
+
+
+class PlayerPortalAccessRequest(BaseModel):
+    session_key: str = SESSION_KEY_DEFAULT
+    nation_id: str
+    password: str
 
 
 def _agent_to_dict(agent: Any) -> Dict[str, Any]:
@@ -327,6 +374,317 @@ def _require_non_empty_profile_text(label: str, value: str) -> str:
     if not text:
         raise HTTPException(status_code=400, detail=f"{label} cannot be empty.")
     return value
+
+
+def _template_year_supported(year: int) -> bool:
+    return year in LOCAL_TEMPLATE_YEARS
+
+
+def _template_year_dir(year: int) -> Path:
+    return LOCAL_TEMPLATE_YEARLY_ROOT / str(year)
+
+
+def _template_file_for(nation_id: str, category: str, year: Optional[int] = None) -> Path:
+    filename = LOCAL_TEMPLATE_FILENAME_BY_NATION[nation_id]
+    if category == "system_prompt":
+        return LOCAL_TEMPLATE_SYSTEM_ROOT / filename
+    if category == "skills_md":
+        return LOCAL_TEMPLATE_SKILLS_ROOT / filename
+    if category == "annual_advice":
+        if year is None:
+            raise ValueError("year is required for annual_advice templates")
+        return _template_year_dir(year) / filename
+    raise ValueError(f"Unknown template category: {category}")
+
+
+def _ensure_local_template_tree() -> int:
+    created = 0
+    for folder in [LOCAL_TEMPLATE_ROOT, LOCAL_TEMPLATE_PREPARING_ROOT, LOCAL_TEMPLATE_SYSTEM_ROOT, LOCAL_TEMPLATE_SKILLS_ROOT, LOCAL_TEMPLATE_YEARLY_ROOT]:
+        folder.mkdir(parents=True, exist_ok=True)
+
+    readme_path = LOCAL_TEMPLATE_ROOT / "README.md"
+    if not readme_path.exists():
+        readme_path.write_text(
+            "\n".join(
+                [
+                    "# 本地治理模板",
+                    "",
+                    "- `preparing/system_prompt/`：开局准备阶段读取。",
+                    "- `preparing/skills/`：开局准备阶段读取。",
+                    "- `yearly_advice/1901-1915/`：按当前年份读取对应国家的年度建议。",
+                    "- 文件留空则跳过，不覆盖数据库中的现有内容。",
+                    "- 准备阶段读取 `System Prompt + Skills + 当年年度建议`。",
+                    "- 年度复盘阶段只读取 `当年目录下的年度建议`。",
+                    "",
+                    "文件名规则：`01_第一排.md` 到 `10_第十排.md`，对应十个国家固定顺序。",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        created += 1
+
+    for year in LOCAL_TEMPLATE_YEARS:
+        _template_year_dir(year).mkdir(parents=True, exist_ok=True)
+
+    for nation in LOCAL_TEMPLATE_NATION_FILES:
+        for category in ("system_prompt", "skills_md"):
+            template_path = _template_file_for(nation["nation_id"], category)
+            if not template_path.exists():
+                template_path.write_text("", encoding="utf-8")
+                created += 1
+        for year in LOCAL_TEMPLATE_YEARS:
+            template_path = _template_file_for(nation["nation_id"], "annual_advice", year)
+            if not template_path.exists():
+                template_path.write_text("", encoding="utf-8")
+                created += 1
+
+    return created
+
+
+def _random_player_password() -> str:
+    return f"{secrets.randbelow(900000) + 100000}"
+
+
+def _ensure_player_portal_passwords() -> Dict[str, Any]:
+    PLAYER_PORTAL_PASSWORDS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    existing: Dict[str, Any] = {}
+    if PLAYER_PORTAL_PASSWORDS_PATH.exists():
+        try:
+            existing = json.loads(PLAYER_PORTAL_PASSWORDS_PATH.read_text(encoding="utf-8"))
+            if not isinstance(existing, dict):
+                existing = {}
+        except Exception:
+            existing = {}
+
+    existing_entries = existing.get("players", [])
+    existing_by_nation: Dict[str, Dict[str, Any]] = {}
+    if isinstance(existing_entries, list):
+        for item in existing_entries:
+            if isinstance(item, dict) and item.get("nation_id") in NATION_IDS:
+                existing_by_nation[str(item["nation_id"])] = item
+
+    normalized_players: List[Dict[str, Any]] = []
+    changed = False
+    for item in LOCAL_TEMPLATE_NATION_FILES:
+        current = existing_by_nation.get(item["nation_id"], {})
+        password = str(current.get("password") or "").strip() or _random_player_password()
+        if current.get("filename") != item["filename"] or current.get("slot_label") != item["slot_label"] or not current.get("password"):
+            changed = True
+        normalized_players.append(
+            {
+                "nation_id": item["nation_id"],
+                "nation_name": item["nation_name"],
+                "slot_label": item["slot_label"],
+                "filename": item["filename"],
+                "password": password,
+            }
+        )
+
+    payload = {
+        "public_path": "/#/public",
+        "player_path_prefix": "/#/player/",
+        "players": normalized_players,
+    }
+    if changed or not PLAYER_PORTAL_PASSWORDS_PATH.exists():
+        PLAYER_PORTAL_PASSWORDS_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return payload
+
+
+def _localhost_request(request: Request) -> bool:
+    host = (request.client.host if request.client else "") or ""
+    return host in {"127.0.0.1", "::1", "localhost"}
+
+
+def _player_portal_meta() -> Dict[str, Dict[str, Any]]:
+    return {item["nation_id"]: item for item in _ensure_player_portal_passwords().get("players", [])}
+
+
+def _player_password_valid(nation_id: str, password: str) -> bool:
+    players = _player_portal_meta()
+    expected = str(players.get(nation_id, {}).get("password") or "").strip()
+    supplied = str(password or "").strip()
+    return bool(expected) and bool(supplied) and secrets.compare_digest(expected, supplied)
+
+
+def _spectator_frontend_base(request: Request) -> str:
+    if request is None:
+        return "http://127.0.0.1:3000"
+    base = str(request.base_url).rstrip("/")
+    host = (request.url.hostname or "").strip().lower()
+    scheme = request.url.scheme or "http"
+
+    if host and host not in {"127.0.0.1", "localhost", "::1"}:
+        return f"{scheme}://{host}:3000"
+
+    lan_host = _detect_lan_host()
+    return f"{scheme}://{lan_host}:3000"
+
+
+def _detect_lan_candidates() -> List[Dict[str, str]]:
+    candidates: List[Dict[str, str]] = []
+    seen: set[str] = set()
+
+    def add_candidate(ip: str, source: str, interface: str = "") -> None:
+        ip = (ip or "").strip()
+        if not ip or ip in seen or ip.startswith(("127.", "169.254.", "198.18.")):
+            return
+        if not re.match(r"^(10|172\.(1[6-9]|2\d|3[0-1])|192\.168)\.\d{1,3}\.\d{1,3}$", ip):
+            return
+        seen.add(ip)
+        candidates.append({"ip": ip, "source": source, "interface": interface})
+
+    try:
+        powershell = subprocess.check_output(
+            [
+                "powershell",
+                "-NoProfile",
+                "-Command",
+                "Get-NetIPConfiguration | Where-Object { $_.NetAdapter.Status -eq 'Up' -and $_.IPv4Address } | ForEach-Object { "
+                "$iface=$_.InterfaceAlias; $_.IPv4Address | ForEach-Object { Write-Output ($iface + '|' + $_.IPAddress) } }",
+            ],
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+            timeout=5,
+        )
+        for line in powershell.splitlines():
+            if "|" not in line:
+                continue
+            interface, ip = [part.strip() for part in line.split("|", 1)]
+            add_candidate(ip, "powershell", interface)
+    except Exception:
+        pass
+
+    try:
+        ipconfig = subprocess.check_output(["ipconfig"], text=True, encoding="utf-8", errors="ignore", timeout=5)
+        current_interface = ""
+        for raw_line in ipconfig.splitlines():
+            line = raw_line.rstrip()
+            if not line:
+                continue
+            if line.endswith(":") and "adapter" in line.lower():
+                current_interface = line.rstrip(":").strip()
+                continue
+            if "IPv4 Address" in line or "IPv4 地址" in line:
+                match = re.search(r"(\d{1,3}(?:\.\d{1,3}){3})", line)
+                if match:
+                    add_candidate(match.group(1), "ipconfig", current_interface)
+    except Exception:
+        pass
+
+    try:
+        candidate = socket.gethostbyname(socket.gethostname())
+        add_candidate(candidate, "hostname")
+    except Exception:
+        pass
+    try:
+        _hostname, _aliases, addresses = socket.gethostbyname_ex(socket.gethostname())
+        for candidate in addresses:
+            add_candidate(candidate, "hostname_ex")
+    except Exception:
+        pass
+
+    return candidates
+
+
+def _detect_lan_host() -> str:
+    candidates = _detect_lan_candidates()
+    wlan_match = next((item for item in candidates if item.get("interface", "").lower() == "wlan"), None)
+    if wlan_match:
+        return wlan_match["ip"]
+    if candidates:
+        return candidates[0]["ip"]
+    return "127.0.0.1"
+
+
+def _editable_fields_for_session(session: Any, phase: Dict[str, str], requested_fields: set[str]) -> None:
+    editable_in_preparing = {"system_prompt", "skills_md", "annual_advice"}
+    editable_in_review = {"system_prompt", "skills_md", "annual_advice"}
+
+    if requested_fields:
+        if session.status == "preparing":
+            forbidden_fields = requested_fields - editable_in_preparing - {"memory"}
+            if forbidden_fields:
+                raise HTTPException(status_code=400, detail="Only setup fields can be changed during preparation.")
+        elif phase["key"] == "review":
+            forbidden_fields = requested_fields - editable_in_review - {"memory"}
+            if forbidden_fields:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Only System Prompt, Skills.md, and yearly advice can be changed during the annual review phase.",
+                )
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Governance changes are only allowed during preparation or the annual review phase.",
+            )
+
+
+def _build_agent_update(
+    session: Any,
+    phase: Dict[str, str],
+    governance: Dict[str, Any],
+    target: Any,
+    nation_id: str,
+    incoming: Dict[str, Optional[str]],
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    requested_fields = {field for field, value in incoming.items() if value is not None}
+    _editable_fields_for_session(session, phase, requested_fields)
+
+    update: Dict[str, Any] = {}
+    next_governance = copy.deepcopy(governance)
+
+    memory_value = incoming.get("memory")
+    if memory_value is not None and memory_value != (target.memory or ""):
+        raise HTTPException(status_code=400, detail="Memory is locked by design and cannot be directly edited.")
+
+    system_prompt_value = incoming.get("system_prompt")
+    if system_prompt_value is not None and system_prompt_value != (target.system_prompt or ""):
+        _require_non_empty_profile_text("System Prompt", system_prompt_value)
+        if session.status != "preparing":
+            used_nations = _governance_nation_edits(next_governance, "system_prompt_updated_nations")
+            if nation_id in used_nations:
+                raise HTTPException(
+                    status_code=400,
+                    detail="System Prompt can only be revised once per nation after opening.",
+                )
+            _record_governance_nation_edit(next_governance, "system_prompt_updated_nations", nation_id)
+        update["system_prompt"] = system_prompt_value
+
+    skills_value = incoming.get("skills_md")
+    if skills_value is not None and skills_value != (target.skills_md or ""):
+        _require_non_empty_profile_text("Skills.md", skills_value)
+        if session.status != "preparing":
+            used_nations = _governance_nation_edits(next_governance, "skills_updated_nations")
+            if nation_id in used_nations:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Skills.md can only be revised once per nation after opening.",
+                )
+            _record_governance_nation_edit(next_governance, "skills_updated_nations", nation_id)
+        update["skills_md"] = skills_value
+
+    annual_advice_value = incoming.get("annual_advice")
+    if annual_advice_value is not None and annual_advice_value != (target.annual_advice or ""):
+        _require_non_empty_profile_text("Yearly advice", annual_advice_value)
+        used_years = set(_annual_advice_years_for_nation(next_governance, nation_id))
+        if session.year in used_years:
+            if session.status == "preparing":
+                raise HTTPException(
+                    status_code=400,
+                    detail="Yearly advice can only be updated once during the preparation stage for the current year.",
+                )
+            raise HTTPException(
+                status_code=400,
+                detail="Yearly advice can only be updated once per nation during each annual review.",
+            )
+        update["annual_advice"] = annual_advice_value
+        _record_annual_advice_update(next_governance, nation_id, session.year)
+        effective_years = next_governance.get("annual_advice_effective_years", {})
+        effective_years[nation_id] = session.year if session.status == "preparing" else session.year + 1
+        next_governance["annual_advice_effective_years"] = effective_years
+
+    return update, next_governance
 
 
 def _session_state(session: Any) -> Dict[str, Any]:
@@ -2637,6 +2995,145 @@ async def get_state(session_key: str = SESSION_KEY_DEFAULT, db: AsyncSession = D
     return {"exists": True, "state": state}
 
 
+def _public_portal_payload(state: Dict[str, Any], request: Request) -> Dict[str, Any]:
+    portal_meta = _player_portal_meta()
+    frontend_base = _spectator_frontend_base(request)
+    return {
+        "year": state["year"],
+        "phase_index": state["phase_index"],
+        "phase_key": state["phase_key"],
+        "phase_label": state["phase_label"],
+        "season": state["season"],
+        "status": state["status"],
+        "engine": state.get("engine", "llm"),
+        "ownership": state["ownership"],
+        "units": state["units"],
+        "scCount": state["scCount"],
+        "nations": [
+            {
+                **nation,
+                "slot_label": portal_meta.get(nation["id"], {}).get("slot_label", nation["name"]),
+                "player_path": f"/#/player/{nation['id']}",
+            }
+            for nation in state["nations"]
+        ],
+        "reports": state.get("reports", [])[:18],
+        "history": state.get("history", [])[:18],
+        "phaseSnapshots": state.get("phaseSnapshots", [])[:24],
+        "public_url": f"{frontend_base}/#/public",
+    }
+
+
+def _private_portal_payload(state: Dict[str, Any], nation_id: str, request: Request) -> Dict[str, Any]:
+    agent = state["agents"].get(nation_id, {})
+    nation = next((item for item in state["nations"] if item["id"] == nation_id), None)
+    if not nation:
+        raise HTTPException(status_code=404, detail="Nation not found.")
+    frontend_base = _spectator_frontend_base(request)
+
+    related_messages = [
+        item
+        for item in state.get("messages", [])
+        if item.get("from") == nation_id or item.get("to") == nation_id
+    ]
+    return {
+        "year": state["year"],
+        "phase_index": state["phase_index"],
+        "phase_key": state["phase_key"],
+        "phase_label": state["phase_label"],
+        "season": state["season"],
+        "status": state["status"],
+        "nation": {
+            **nation,
+            "sc": state["scCount"].get(nation_id, 0),
+            "private_url": f"{frontend_base}/#/player/{nation_id}",
+        },
+        "map": {
+            "ownership": state["ownership"],
+            "units": state["units"],
+            "scCount": state["scCount"],
+            "nations": state["nations"],
+            "reports": state.get("reports", [])[:12],
+            "history": state.get("history", [])[:12],
+            "phaseSnapshots": state.get("phaseSnapshots", [])[:18],
+        },
+        "agent_profile": {
+            "system_prompt": agent.get("system_prompt", ""),
+            "skills_md": agent.get("skills_md", ""),
+            "memory": agent.get("memory", ""),
+            "annual_advice": agent.get("annual_advice", ""),
+        },
+        "messages": related_messages,
+        "reports": state.get("reports", [])[:24],
+        "history": state.get("history", [])[:24],
+        "blackbox": state.get("blackbox", {}).get(nation_id, {}),
+    }
+
+
+@router.get("/spectator/public")
+async def spectator_public(session_key: str = SESSION_KEY_DEFAULT, request: Request = None, db: AsyncSession = Depends(get_db)):
+    result = await get_state(session_key=session_key, db=db)
+    if not result.get("exists") or not result.get("state"):
+        raise HTTPException(status_code=404, detail="Game session not initialized.")
+    return {"ok": True, "state": _public_portal_payload(result["state"], request)}
+
+
+@router.post("/spectator/player")
+async def spectator_player_access(data: PlayerPortalAccessRequest, request: Request, db: AsyncSession = Depends(get_db)):
+    if data.nation_id not in NATION_IDS:
+        raise HTTPException(status_code=404, detail="Nation not found.")
+    if not _player_password_valid(data.nation_id, data.password):
+        raise HTTPException(status_code=403, detail="Password is incorrect.")
+
+    result = await get_state(session_key=data.session_key or SESSION_KEY_DEFAULT, db=db)
+    if not result.get("exists") or not result.get("state"):
+        raise HTTPException(status_code=404, detail="Game session not initialized.")
+    return {"ok": True, "state": _private_portal_payload(result["state"], data.nation_id, request)}
+
+
+@router.get("/spectator/credentials")
+async def spectator_credentials(session_key: str = SESSION_KEY_DEFAULT, request: Request = None, db: AsyncSession = Depends(get_db)):
+    if request is None or not _localhost_request(request):
+        raise HTTPException(status_code=403, detail="Player credentials can only be viewed from localhost.")
+    result = await get_state(session_key=session_key, db=db)
+    if not result.get("exists") or not result.get("state"):
+        raise HTTPException(status_code=404, detail="Game session not initialized.")
+
+    state = result["state"]
+    base = _spectator_frontend_base(request)
+    payload = _ensure_player_portal_passwords()
+    players = []
+    for item in payload.get("players", []):
+        players.append(
+            {
+                **item,
+                "url": f"{base}/#/player/{item['nation_id']}",
+                "nation_color": next((nation["color"] for nation in state["nations"] if nation["id"] == item["nation_id"]), "#888888"),
+            }
+        )
+    return {
+        "ok": True,
+        "public_url": f"{base}/#/public",
+        "players": players,
+    }
+
+
+@router.get("/spectator/network")
+async def spectator_network_info(request: Request):
+    if request is None or not _localhost_request(request):
+        raise HTTPException(status_code=403, detail="Network info can only be viewed from localhost.")
+    candidates = _detect_lan_candidates()
+    recommended = next((item["ip"] for item in candidates if item.get("interface", "").lower() == "wlan"), None)
+    if not recommended and candidates:
+        recommended = candidates[0]["ip"]
+    return {
+        "ok": True,
+        "recommended_ip": recommended or "",
+        "recommended_base_url": f"http://{recommended}:3000" if recommended else "",
+        "candidates": candidates,
+    }
+
+
 @router.post("/advance")
 async def advance_phase(data: AdvanceRequest, db: AsyncSession = Depends(get_db)):
     """Advance one phase. Decision phases require a real LLM result."""
@@ -3089,85 +3586,26 @@ async def update_agent(data: AgentUpdateRequest, db: AsyncSession = Depends(get_
     if data.nation_id in _eliminated_nations(governance):
         raise HTTPException(status_code=400, detail="This nation has been eliminated and can no longer be edited or revived.")
 
-    update: Dict[str, Any] = {}
-    editable_in_preparing = {"system_prompt", "skills_md", "annual_advice"}
-    editable_in_review = {"system_prompt", "skills_md", "annual_advice"}
-    requested_fields = {
-        field
-        for field in editable_in_preparing | editable_in_review | {"memory"}
-        if getattr(data, field) is not None
-    }
-
-    if requested_fields:
-        if session.status == "preparing":
-            forbidden_fields = requested_fields - editable_in_preparing - {"memory"}
-            if forbidden_fields:
-                raise HTTPException(status_code=400, detail="Only setup fields can be changed during preparation.")
-        elif phase["key"] == "review":
-            forbidden_fields = requested_fields - editable_in_review - {"memory"}
-            if forbidden_fields:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Only System Prompt, Skills.md, and yearly advice can be changed during the annual review phase.",
-                )
-        else:
-            raise HTTPException(
-                status_code=400,
-                detail="Governance changes are only allowed during preparation or the annual review phase.",
-            )
-
-    if data.memory is not None and data.memory != (target.memory or ""):
-        raise HTTPException(status_code=400, detail="Memory is locked by design and cannot be directly edited.")
-
-    if data.system_prompt is not None and data.system_prompt != (target.system_prompt or ""):
-        _require_non_empty_profile_text("System Prompt", data.system_prompt)
-        if session.status != "preparing":
-            used_nations = _governance_nation_edits(governance, "system_prompt_updated_nations")
-            if data.nation_id in used_nations:
-                raise HTTPException(
-                    status_code=400,
-                    detail="System Prompt can only be revised once per nation after opening.",
-                )
-            _record_governance_nation_edit(governance, "system_prompt_updated_nations", data.nation_id)
-        update["system_prompt"] = data.system_prompt
-
-    if data.skills_md is not None and data.skills_md != (target.skills_md or ""):
-        _require_non_empty_profile_text("Skills.md", data.skills_md)
-        if session.status != "preparing":
-            used_nations = _governance_nation_edits(governance, "skills_updated_nations")
-            if data.nation_id in used_nations:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Skills.md can only be revised once per nation after opening.",
-                )
-            _record_governance_nation_edit(governance, "skills_updated_nations", data.nation_id)
-        update["skills_md"] = data.skills_md
-
-    if data.annual_advice is not None and data.annual_advice != (target.annual_advice or ""):
-        _require_non_empty_profile_text("Yearly advice", data.annual_advice)
-        used_years = set(_annual_advice_years_for_nation(governance, data.nation_id))
-        if session.year in used_years:
-            if session.status == "preparing":
-                raise HTTPException(
-                    status_code=400,
-                    detail="Yearly advice can only be updated once during the preparation stage for the current year.",
-                )
-            raise HTTPException(
-                status_code=400,
-                detail="Yearly advice can only be updated once per nation during each annual review.",
-            )
-        update["annual_advice"] = data.annual_advice
-        _record_annual_advice_update(governance, data.nation_id, session.year)
-        effective_years = governance.get("annual_advice_effective_years", {})
-        effective_years[data.nation_id] = session.year if session.status == "preparing" else session.year + 1
-        governance["annual_advice_effective_years"] = effective_years
+    update, next_governance = _build_agent_update(
+        session,
+        phase,
+        governance,
+        target,
+        data.nation_id,
+        {
+            "system_prompt": data.system_prompt,
+            "skills_md": data.skills_md,
+            "memory": data.memory,
+            "annual_advice": data.annual_advice,
+        },
+    )
     if not update:
         raise HTTPException(status_code=400, detail="No fields provided for update.")
 
     updated = await service.update(target.id, update)
     await Game_sessionsService(db).update(
         session.id,
-        {"governance_json": json.dumps(governance, ensure_ascii=False)},
+        {"governance_json": json.dumps(next_governance, ensure_ascii=False)},
     )
     append_game_log(
         session_key,
@@ -3181,6 +3619,170 @@ async def update_agent(data: AgentUpdateRequest, db: AsyncSession = Depends(get_
         },
     )
     return {"ok": True, "agent": _agent_to_dict(updated)}
+
+
+@router.post("/local_templates/sync")
+async def sync_local_templates(data: LocalTemplateSyncRequest, db: AsyncSession = Depends(get_db)):
+    """Read fixed local Markdown templates for the current editable phase and write non-empty content into the real agent profiles."""
+    session_key = data.session_key or SESSION_KEY_DEFAULT
+    session = await _load_session(db, session_key)
+    if not session:
+        raise HTTPException(status_code=404, detail="Game session not initialized.")
+
+    phase = _phase_meta(session.phase_index)
+    if session.status == "preparing":
+        sync_mode = "preparing"
+    elif phase["key"] == "review" and session.status != "finished":
+        sync_mode = "review"
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="Local template sync is only available during preparation or the annual review phase.",
+        )
+
+    scaffolded_files = _ensure_local_template_tree()
+    governance = _normalize_governance_state(
+        json.loads(session.governance_json or json.dumps(_default_governance_state(), ensure_ascii=False))
+    )
+    service = Nation_agentsService(db)
+    rows = await service.list_by_field("session_key", session_key, skip=0, limit=100)
+    agents_by_nation = {row.nation_id: row for row in rows}
+
+    sync_year_supported = _template_year_supported(session.year)
+    applied: List[Dict[str, Any]] = []
+
+    for nation in LOCAL_TEMPLATE_NATION_FILES:
+        nation_id = nation["nation_id"]
+        target = agents_by_nation.get(nation_id)
+        if not target:
+            applied.append(
+                {
+                    "nation_id": nation_id,
+                    "nation_name": nation["nation_name"],
+                    "applied_fields": [],
+                    "skipped_empty_fields": [],
+                    "skipped_unchanged_fields": [],
+                    "errors": ["Nation agent profile not found."],
+                }
+            )
+            continue
+        if nation_id in _eliminated_nations(governance):
+            applied.append(
+                {
+                    "nation_id": nation_id,
+                    "nation_name": nation["nation_name"],
+                    "applied_fields": [],
+                    "skipped_empty_fields": [],
+                    "skipped_unchanged_fields": [],
+                    "errors": ["Nation has been eliminated."],
+                }
+            )
+            continue
+
+        incoming: Dict[str, Optional[str]] = {}
+        skipped_empty_fields: List[str] = []
+        skipped_unchanged_fields: List[str] = []
+
+        if sync_mode == "preparing":
+            for field_name in ("system_prompt", "skills_md"):
+                template_path = _template_file_for(nation_id, field_name)
+                content = template_path.read_text(encoding="utf-8")
+                if not content.strip():
+                    skipped_empty_fields.append(field_name)
+                elif content == (target.system_prompt or "") and field_name == "system_prompt":
+                    skipped_unchanged_fields.append(field_name)
+                elif content == (target.skills_md or "") and field_name == "skills_md":
+                    skipped_unchanged_fields.append(field_name)
+                else:
+                    incoming[field_name] = content
+
+        if sync_year_supported:
+            advice_path = _template_file_for(nation_id, "annual_advice", session.year)
+            advice_content = advice_path.read_text(encoding="utf-8")
+            if not advice_content.strip():
+                skipped_empty_fields.append("annual_advice")
+            elif advice_content == (target.annual_advice or ""):
+                skipped_unchanged_fields.append("annual_advice")
+            else:
+                incoming["annual_advice"] = advice_content
+        else:
+            skipped_empty_fields.append("annual_advice")
+
+        if not incoming:
+            applied.append(
+                {
+                    "nation_id": nation_id,
+                    "nation_name": nation["nation_name"],
+                    "applied_fields": [],
+                    "skipped_empty_fields": skipped_empty_fields,
+                    "skipped_unchanged_fields": skipped_unchanged_fields,
+                    "errors": [],
+                }
+            )
+            continue
+
+        try:
+            update, next_governance = _build_agent_update(session, phase, governance, target, nation_id, incoming)
+            if update:
+                updated = await service.update(target.id, update)
+                agents_by_nation[nation_id] = updated or target
+                governance = next_governance
+            applied.append(
+                {
+                    "nation_id": nation_id,
+                    "nation_name": nation["nation_name"],
+                    "applied_fields": sorted(update.keys()),
+                    "skipped_empty_fields": skipped_empty_fields,
+                    "skipped_unchanged_fields": skipped_unchanged_fields,
+                    "errors": [],
+                }
+            )
+        except HTTPException as exc:
+            applied.append(
+                {
+                    "nation_id": nation_id,
+                    "nation_name": nation["nation_name"],
+                    "applied_fields": [],
+                    "skipped_empty_fields": skipped_empty_fields,
+                    "skipped_unchanged_fields": skipped_unchanged_fields,
+                    "errors": [str(exc.detail)],
+                }
+            )
+
+    await Game_sessionsService(db).update(
+        session.id,
+        {"governance_json": json.dumps(governance, ensure_ascii=False)},
+    )
+    append_game_log(
+        session_key,
+        "local_template_sync",
+        {
+            "mode": sync_mode,
+            "year": session.year,
+            "template_root": str(LOCAL_TEMPLATE_ROOT),
+            "scaffolded_files": scaffolded_files,
+            "results": applied,
+        },
+    )
+
+    state_payload = await get_state(session_key=session_key, db=db)
+    applied_count = sum(len(item["applied_fields"]) for item in applied)
+    error_count = sum(1 for item in applied if item["errors"])
+    return {
+        "ok": True,
+        "template_root": str(LOCAL_TEMPLATE_ROOT),
+        "mode": sync_mode,
+        "year": session.year,
+        "year_supported": sync_year_supported,
+        "scaffolded_files": scaffolded_files,
+        "applied": applied,
+        "summary": {
+            "nations_with_updates": sum(1 for item in applied if item["applied_fields"]),
+            "field_updates": applied_count,
+            "error_count": error_count,
+        },
+        "state": state_payload.get("state") if isinstance(state_payload, dict) else None,
+    }
 
 
 @router.post("/sc_endowment")

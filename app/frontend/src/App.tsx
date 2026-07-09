@@ -9,10 +9,12 @@ import ControlPage from './pages/ControlPage';
 import MessagesPage from './pages/MessagesPage';
 import HistoryPage from './pages/HistoryPage';
 import DataPage from './pages/DataPage';
+import PublicPortalPage from './pages/PublicPortalPage';
+import PlayerPortalPage from './pages/PlayerPortalPage';
 
 const queryClient = new QueryClient();
 
-const AppRoutes = () => (
+const AdminRoutes = () => (
   <Routes>
     <Route path="/" element={<Index />} />
     <Route path="/map" element={<MapPage />} />
@@ -27,16 +29,25 @@ const AppRoutes = () => (
 
 const App = () => (
   <QueryClientProvider client={queryClient}>
-    <GameProvider>
-      <TooltipProvider>
-        <Toaster position="top-center" richColors />
-        <HashRouter>
-          <AppRoutes />
-        </HashRouter>
-      </TooltipProvider>
-    </GameProvider>
+    <TooltipProvider>
+      <Toaster position="top-center" richColors />
+      <HashRouter>
+        <Routes>
+          <Route path="/public" element={<PublicPortalPage />} />
+          <Route path="/player/:nationId" element={<PlayerPortalPage />} />
+          <Route
+            path="*"
+            element={
+              <GameProvider>
+                <AdminRoutes />
+              </GameProvider>
+            }
+          />
+        </Routes>
+      </HashRouter>
+    </TooltipProvider>
   </QueryClientProvider>
 );
 
 export default App;
-export { AppRoutes };
+export { AdminRoutes };

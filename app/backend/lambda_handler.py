@@ -528,7 +528,8 @@ def handle_config_request(headers: dict, query_params: dict) -> Dict[str, Any]:
     # Security: Only return frontend-required configuration
     # Define what frontend actually needs (based on code analysis)
     frontend_required_config = {
-        "API_BASE_URL": os.environ.get("VITE_API_BASE_URL", "http://127.0.0.1:8000")
+        "API_BASE_URL": os.environ.get("VITE_API_BASE_URL", "http://127.0.0.1:8000"),
+        "PORTAL_SNAPSHOT_URL": os.environ.get("VITE_PORTAL_SNAPSHOT_URL"),
         # Only add other configs if frontend actually uses them
         # DO NOT expose: VITE_FRONTEND_URL, secrets, internal URLs, etc.
     }

@@ -195,12 +195,19 @@ def health_check():
 def runtime_config():
     """Expose the minimal runtime config used by the frontend."""
     api_base_url = os.environ.get("VITE_API_BASE_URL") or settings.backend_url
+    portal_snapshot_url = os.environ.get("VITE_PORTAL_SNAPSHOT_URL")
 
     if not isinstance(api_base_url, str) or not api_base_url.startswith(("http://", "https://")):
         api_base_url = "http://127.0.0.1:8000"
 
+    if portal_snapshot_url is not None and (
+        not isinstance(portal_snapshot_url, str)
+        or not portal_snapshot_url.startswith(("http://", "https://"))
+    ):
+        portal_snapshot_url = None
+
     return JSONResponse(
-        content={"API_BASE_URL": api_base_url},
+        content={"API_BASE_URL": api_base_url, "PORTAL_SNAPSHOT_URL": portal_snapshot_url},
         headers={
             "Cache-Control": "public, max-age=300",
             "X-Content-Type-Options": "nosniff",

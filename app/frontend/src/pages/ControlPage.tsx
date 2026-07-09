@@ -1,11 +1,14 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
-import { Brain, ChevronRight, Download, Flag, Loader2, Play, RotateCcw, Settings2 } from 'lucide-react';
+import { Brain, ChevronRight, Copy, Download, Flag, KeyRound, Loader2, Play, Power, Radio, RotateCcw, Settings2 } from 'lucide-react';
 import { useGame } from '@/game/GameContext';
+import { fetchSpectatorCredentials, fetchSpectatorNetworkInfo, SpectatorCredentialsResponse, SpectatorNetworkInfoResponse } from '@/game/api';
 import { createInitialState, exportState, phaseAt, PHASES } from '@/game/engine';
+import { buildPortalSnapshotBundle } from '@/game/portalSnapshot';
 import AppShell from '@/components/AppShell';
 import BattleReportPanel from '@/components/BattleReportPanel';
+import PortalQrCode from '@/components/PortalQrCode';
 import { Button } from '@/components/ui/button';
 import {
   AlertDialog,
@@ -20,6 +23,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { getPortalSnapshotURL } from '@/lib/config';
 import { cn } from '@/lib/utils';
 
 const INITIAL_OWNERSHIP = createInitialState().ownership;
@@ -41,10 +45,149 @@ const ControlPage: React.FC = () => {
   const phase = phaseAt(state.phaseIndex);
   const reasoning = busy && ready && state.status !== 'preparing';
   const [maxYearDraft, setMaxYearDraft] = useState(String(state.governance.maxYear || 1910));
+  const [portalAccess, setPortalAccess] = useState<SpectatorCredentialsResponse | null>(null);
+  const [networkInfo, setNetworkInfo] = useState<SpectatorNetworkInfoResponse | null>(null);
+  const [lanShareEnabled, setLanShareEnabled] = useState(() => {
+    if (typeof window === 'undefined') {
+      return false;
+    }
+    return window.localStorage.getItem('lan-share-enabled') === 'true';
+  });
+  const [shareBaseUrl, setShareBaseUrl] = useState(() => {
+    if (typeof window === 'undefined') {
+      return '';
+    }
+    return window.localStorage.getItem('player-share-base-url') || '';
+  });
 
   useEffect(() => {
     setMaxYearDraft(String(state.governance.maxYear || 1910));
   }, [state.governance.maxYear]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    window.localStorage.setItem('player-share-base-url', shareBaseUrl);
+  }, [shareBaseUrl]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    window.localStorage.setItem('lan-share-enabled', String(lanShareEnabled));
+  }, [lanShareEnabled]);
+
+  useEffect(() => {
+    if (!lanShareEnabled) {
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const { result, network } = await loadLanShareData();
+        if (cancelled) {
+          return;
+        }
+        setPortalAccess(result);
+        setNetworkInfo(network);
+      } catch {
+        if (cancelled) {
+          return;
+        }
+        setPortalAccess(null);
+        setNetworkInfo(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [lanShareEnabled]);
+
+  const portalSnapshotUrl = getPortalSnapshotURL();
+
+  const loadLanShareData = async () => {
+    const [result, network] = await Promise.all([fetchSpectatorCredentials(), fetchSpectatorNetworkInfo()]);
+    setPortalAccess(result);
+    setNetworkInfo(network);
+    if (!window.localStorage.getItem('player-share-base-url') && network.recommended_base_url) {
+      setShareBaseUrl(network.recommended_base_url);
+    }
+    return { result, network };
+  };
+
+  const normalizedShareBaseUrl = shareBaseUrl.trim().replace(/\/+$/, '');
+  const publicPortalUrl = normalizedShareBaseUrl
+    ? `${normalizedShareBaseUrl}/#/public`
+    : portalAccess?.public_url || '';
+
+  const getSharedPlayerUrl = (nationId: string) =>
+    normalizedShareBaseUrl ? `${normalizedShareBaseUrl}/#/player/${nationId}` : '';
+
+  const handleCopyAllPortalAccess = async () => {
+    if (!portalAccess) {
+      return;
+    }
+    const content = [
+      '公共页',
+      publicPortalUrl,
+      '',
+      '各排私有页',
+      ...portalAccess.players.flatMap((player) => [
+        player.slot_label,
+        `链接：${getSharedPlayerUrl(player.nation_id) || player.url}`,
+        `密码：${player.password}`,
+        '',
+      ]),
+    ].join('\n');
+
+    try {
+      await navigator.clipboard.writeText(content);
+      toast.success('已复制全部玩家链接与密码');
+    } catch {
+      toast.error('复制失败，请检查浏览器剪贴板权限');
+    }
+  };
+
+  const handleCopySinglePortalAccess = async (slotLabel: string, url: string, password: string) => {
+    try {
+      await navigator.clipboard.writeText(`${slotLabel}\n链接：${url}\n密码：${password}`);
+      toast.success(`已复制 ${slotLabel} 的访问链接与密码`);
+    } catch {
+      toast.error('复制失败，请检查浏览器剪贴板权限');
+    }
+  };
+
+  const handleAutoFillLanAddress = async () => {
+    try {
+      const network = networkInfo || (await fetchSpectatorNetworkInfo());
+      setNetworkInfo(network);
+      if (!network.recommended_base_url) {
+        toast.error('未能自动识别当前 WLAN IP，请手动填写');
+        return;
+      }
+      setShareBaseUrl(network.recommended_base_url);
+      toast.success(`已自动填入共享地址：${network.recommended_base_url}`);
+    } catch {
+      toast.error('未能自动识别当前 WLAN IP，请手动填写');
+    }
+  };
+
+  const handleToggleLanShare = async () => {
+    if (lanShareEnabled) {
+      setLanShareEnabled(false);
+      return;
+    }
+    try {
+      await loadLanShareData();
+      setLanShareEnabled(true);
+      toast.success('局域网分享已启用');
+    } catch {
+      setPortalAccess(null);
+      setNetworkInfo(null);
+      toast.error('启用局域网分享失败，请检查本机服务状态');
+    }
+  };
 
   const handleExport = () => {
     const data = exportState(state);
@@ -62,6 +205,32 @@ const ControlPage: React.FC = () => {
       URL.revokeObjectURL(url);
     }, 1000);
     toast.success('已导出当前局势 JSON');
+  };
+
+  const handleExportPortalSnapshot = async () => {
+    try {
+      const access = portalAccess || (await fetchSpectatorCredentials());
+      if (!portalAccess) {
+        setPortalAccess(access);
+      }
+      const bundle = buildPortalSnapshotBundle(state, access);
+      const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = 'latest.json';
+      anchor.rel = 'noopener';
+      anchor.style.display = 'none';
+      document.body.appendChild(anchor);
+      anchor.click();
+      window.setTimeout(() => {
+        document.body.removeChild(anchor);
+        URL.revokeObjectURL(url);
+      }, 1000);
+      toast.success('已导出线上快照 latest.json');
+    } catch {
+      toast.error('导出线上快照失败，请检查玩家访问凭据是否可用');
+    }
   };
 
   const handleInitialize = async () => {
@@ -246,6 +415,11 @@ const ControlPage: React.FC = () => {
               智能体设置
             </Button>
 
+            <Button variant="secondary" onClick={handleExportPortalSnapshot}>
+              <Download className="mr-1.5 h-4 w-4" />
+              导出线上快照 latest.json
+            </Button>
+
             <Button variant="outline" onClick={handleExport} className="bg-transparent hover:bg-secondary">
               <Download className="mr-1.5 h-4 w-4" />
               导出 JSON
@@ -282,6 +456,160 @@ const ControlPage: React.FC = () => {
                 </AlertDialogFooter>
               </AlertDialogContent>
             </AlertDialog>
+          </section>
+
+          <section className="rounded-lg border border-border bg-card p-6">
+            <div className="mb-4 flex items-center gap-2">
+              <Radio className="h-4 w-4 text-primary" />
+              <h3 className="font-display text-lg font-semibold">玩家页面发布</h3>
+            </div>
+
+            <div className="space-y-4">
+              <div className="rounded-md border border-border/70 bg-background/30 p-4 text-sm">
+                <div className="font-medium text-foreground">线上静态快照模式</div>
+                <div className="mt-1 text-muted-foreground">
+                  每回合导出一次 `latest.json`，上传覆盖对象存储中的同名文件。
+                </div>
+                <div className="mt-3 rounded-md border border-border/60 bg-background/40 px-3 py-3 text-xs text-muted-foreground">
+                  <div>Netlify 变量：<span className="ml-1 font-mono text-foreground">VITE_PORTAL_SNAPSHOT_URL</span></div>
+                  <div className="mt-1">
+                    当前值：
+                    <span className="ml-1 font-mono text-foreground">{portalSnapshotUrl || '待填写'}</span>
+                  </div>
+                  <div className="mt-1">示例：<span className="font-mono text-foreground">https://your-bucket.example.com/snapshot/latest.json</span></div>
+                </div>
+              </div>
+
+              <div className="rounded-md border border-border/70 bg-secondary/20 p-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <div className="font-medium text-foreground">局域网直连工具</div>
+                    <div className="mt-1 text-sm text-muted-foreground">默认关闭。启用后可复制链接、密码和二维码。</div>
+                  </div>
+                  <Button type="button" variant={lanShareEnabled ? 'destructive' : 'outline'} className="bg-transparent" onClick={handleToggleLanShare}>
+                    <Power className="mr-1.5 h-4 w-4" />
+                    {lanShareEnabled ? '关闭局域网分享' : '启用局域网分享'}
+                  </Button>
+                </div>
+
+                {lanShareEnabled ? (
+                  <div className="mt-4 space-y-4">
+                    {portalAccess ? (
+                      <div className="space-y-4">
+                        <div className="flex flex-wrap gap-3">
+                          <Button variant="secondary" onClick={handleCopyAllPortalAccess}>
+                            <Copy className="mr-1.5 h-4 w-4" />
+                            复制所有玩家链接与密码
+                          </Button>
+                        </div>
+
+                        <div className="rounded-md border border-border/70 bg-background/30 p-4">
+                          <div className="text-sm font-medium text-foreground">共享访问地址</div>
+                          <div className="mt-1 text-sm text-muted-foreground">
+                            填当前这台电脑在同一热点或同一 Wi-Fi 下的可访问地址。玩家二维码和复制链接都会使用这里。
+                          </div>
+                          <div className="mt-3 flex flex-wrap gap-3">
+                            <Input
+                              className="min-w-[280px] flex-1"
+                              value={shareBaseUrl}
+                              onChange={(event) => setShareBaseUrl(event.target.value)}
+                              placeholder="例如 http://192.168.3.17:3000"
+                            />
+                            <Button type="button" variant="outline" className="bg-transparent" onClick={handleAutoFillLanAddress}>
+                              自动读取当前 WLAN IP
+                            </Button>
+                          </div>
+                          {networkInfo?.candidates?.length ? (
+                            <div className="mt-3 text-xs text-muted-foreground">
+                              当前识别到的局域网候选：
+                              <div className="mt-1 space-y-1 font-mono text-foreground">
+                                {networkInfo.candidates.map((candidate) => (
+                                  <div key={`${candidate.interface}-${candidate.ip}-${candidate.source}`}>
+                                    {candidate.ip}
+                                    {candidate.interface ? ` · ${candidate.interface}` : ''}
+                                    {candidate.source ? ` · ${candidate.source}` : ''}
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          ) : null}
+                        </div>
+
+                        <div className="rounded-md border border-border/70 bg-secondary/20 p-4 text-sm">
+                          <div className="flex flex-wrap items-start justify-between gap-4">
+                            <div className="min-w-0 flex-1">
+                              <div className="font-medium text-foreground">公共页</div>
+                              <div className="mt-1 break-all font-mono text-muted-foreground">{publicPortalUrl}</div>
+                            </div>
+                            <div className="flex shrink-0 flex-col items-center gap-2">
+                              <PortalQrCode
+                                value={publicPortalUrl}
+                                size={144}
+                                className="rounded-md border border-border/70"
+                              />
+                              <div className="text-xs text-muted-foreground">扫码进入公共页</div>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                          {portalAccess.players.map((player) => (
+                            <div key={player.nation_id} className="rounded-md border border-border/70 bg-background/40 p-4">
+                              <div className="flex items-start justify-between gap-3">
+                                <div>
+                                  <div className="flex items-center gap-2">
+                                    <span className="h-3 w-3 rounded-sm" style={{ background: player.nation_color }} />
+                                    <div className="font-medium text-foreground">{player.slot_label}</div>
+                                  </div>
+                                  <div className="mt-1 text-xs text-muted-foreground">{player.filename}</div>
+                                </div>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="bg-transparent"
+                                  onClick={() =>
+                                    handleCopySinglePortalAccess(
+                                      player.slot_label,
+                                      getSharedPlayerUrl(player.nation_id) || player.url,
+                                      player.password,
+                                    )
+                                  }
+                                >
+                                  <Copy className="mr-1.5 h-3.5 w-3.5" />
+                                  复制
+                                </Button>
+                              </div>
+
+                              <div className="mt-4 flex flex-col items-center gap-3">
+                                <PortalQrCode
+                                  value={getSharedPlayerUrl(player.nation_id) || player.url}
+                                  size={176}
+                                  className="rounded-md border border-border/70"
+                                />
+                                <div className="text-xs text-muted-foreground">扫码进入私有页</div>
+                              </div>
+
+                              <div className="mt-4 text-xs text-muted-foreground">私有页链接</div>
+                              <div className="mt-1 break-all font-mono text-xs text-foreground">
+                                {getSharedPlayerUrl(player.nation_id) || player.url}
+                              </div>
+                              <div className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
+                                <KeyRound className="h-3.5 w-3.5 text-primary" />
+                                访问密码：<span className="font-mono text-foreground">{player.password}</span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="rounded-md border border-border/70 bg-secondary/20 p-3 text-sm text-muted-foreground">
+                        当前未能读取局域网玩家通道信息。这个面板只允许在本机访问时读取密码清单。
+                      </div>
+                    )}
+                  </div>
+                ) : null}
+              </div>
+            </div>
           </section>
 
           <section className="rounded-lg border border-border bg-card p-6">

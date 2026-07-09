@@ -312,7 +312,6 @@ const MapPage: React.FC = () => {
                       <span className="h-4 w-4 shrink-0 rounded-sm" style={{ background: nation.color }} />
                       <div className="min-w-0 flex-1">
                         <div className="truncate text-sm font-medium">{nation.short}</div>
-                        <div className="text-xs text-muted-foreground">{nation.traits.temperament}</div>
                       </div>
                       <div className="text-right">
                         <div className="text-sm font-semibold text-primary">{sc} SC</div>
