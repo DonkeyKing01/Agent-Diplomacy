@@ -436,7 +436,7 @@ const INITIAL_UNITS: { owner: string; type: UnitType; location: string }[] = [
   { owner: 'aur', type: 'Fleet', location: 'aur_march' },
   { owner: 'aur', type: 'Army', location: 'aur_cap' },
   { owner: 'aur', type: 'Fleet', location: 'aur_cliff' },
-  { owner: 'mar', type: 'Fleet', location: 'mar_dock' },
+  { owner: 'mar', type: 'Army', location: 'mar_dock' },
   { owner: 'mar', type: 'Fleet', location: 'mar_shoal' },
   { owner: 'mar', type: 'Army', location: 'mar_cap' },
   { owner: 'vel', type: 'Fleet', location: 'windward_key' },
@@ -460,7 +460,7 @@ const INITIAL_UNITS: { owner: string; type: UnitType; location: string }[] = [
   { owner: 'dra', type: 'Fleet', location: 'mt_skytooth' },
   { owner: 'dra', type: 'Army', location: 'dra_watch' },
   { owner: 'dra', type: 'Army', location: 'dra_peak' },
-  { owner: 'ith', type: 'Fleet', location: 'ith_spring' },
+  { owner: 'ith', type: 'Army', location: 'ith_spring' },
   { owner: 'ith', type: 'Army', location: 'ith_garden' },
   { owner: 'ith', type: 'Army', location: 'ith_cap' },
 ];

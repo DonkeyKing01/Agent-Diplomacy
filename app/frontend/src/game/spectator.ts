@@ -1,11 +1,19 @@
 import { BackendPhaseSnapshot, BackendReport, BackendUnit } from './api';
 import { BattleReportItem, createInitialState, GameState, NATIONS, PROVINCE_MAP, Unit } from './engine';
 
+function normalizeUnitType(location: string, type: Unit['type']): Unit['type'] {
+  const provinceType = PROVINCE_MAP[location]?.type;
+  if (type === 'Fleet' && provinceType !== 'coast' && provinceType !== 'sea') {
+    return 'Army';
+  }
+  return type;
+}
+
 function mapUnits(units: BackendUnit[], prefix: string): Unit[] {
   return (units || []).map((unit, index) => ({
     id: `${prefix}-${index}`,
     owner: unit.owner,
-    type: unit.type,
+    type: normalizeUnitType(unit.location, unit.type),
     location: unit.location,
   }));
 }

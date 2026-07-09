@@ -400,3 +400,27 @@ def test_two_island_map_has_neutral_central_contested_region():
         or (unit["type"] == "Army" and PROVINCES[unit["location"]]["type"] in {"land", "coast"})
         for unit in units
     )
+
+
+def test_coastal_cells_must_touch_real_sea_tiles():
+    invalid = [
+        province_id
+        for province_id, province in PROVINCES.items()
+        if province["type"] == "coast"
+        and not any(PROVINCES[neighbor]["type"] == "sea" for neighbor in province["adj"])
+    ]
+
+    assert invalid == []
+
+
+def test_inland_cells_use_armies_in_new_opening_setup():
+    ownership, units, _ = initial_board()
+
+    assert ownership["mar_dock"] == "mar"
+    assert ownership["ith_spring"] == "ith"
+    assert PROVINCES["mar_dock"]["type"] == "land"
+    assert PROVINCES["ith_spring"]["type"] == "land"
+    assert PROVINCES["mar_dock"]["name"] == "二排中镇"
+    assert any(unit["owner"] == "mar" and unit["type"] == "Army" and unit["location"] == "mar_dock" for unit in units)
+    assert any(unit["owner"] == "ith" and unit["type"] == "Army" and unit["location"] == "ith_spring" for unit in units)
+    assert not any(unit["type"] == "Fleet" and unit["location"] in {"mar_dock", "ith_spring"} for unit in units)

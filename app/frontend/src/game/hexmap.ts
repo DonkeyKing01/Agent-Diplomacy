@@ -56,7 +56,7 @@ export const HEX_CELLS: HexCellDef[] = [
   { id: 'ferr_mine', name: '七排北矿', type: 'land', isSC: true, q: 1, r: 1 },
   { id: 'sol_temple', name: '中央海峡北段', type: 'sea', isSC: false, q: 2, r: 1 },
   { id: 'sol_cap', name: '五排大营', type: 'land', isSC: true, q: 3, r: 1 },
-  { id: 'ith_spring', name: '十排北泉', type: 'coast', isSC: true, q: 4, r: 1 },
+  { id: 'ith_spring', name: '十排北泉', type: 'land', isSC: true, q: 4, r: 1 },
   { id: 'amber_cross', name: '东桥镇', type: 'land', isSC: true, q: 5, r: 1 },
   { id: 'zeph_cap', name: '八排主岛', type: 'coast', isSC: true, q: 6, r: 1 },
   { id: 'sea_east_ocean', name: '东中海', type: 'sea', isSC: false, q: 7, r: 1 },
@@ -76,7 +76,7 @@ export const HEX_CELLS: HexCellDef[] = [
   // Southern middle
   { id: 'sea_west_inner', name: '西南海', type: 'sea', isSC: false, q: -2, r: 3 },
   { id: 'sea_west_inlet', name: '六排西港', type: 'coast', isSC: true, q: -1, r: 3 },
-  { id: 'mar_dock', name: '二排船坞', type: 'coast', isSC: true, q: 0, r: 3 },
+  { id: 'mar_dock', name: '二排中镇', type: 'land', isSC: true, q: 0, r: 3 },
   { id: 'nor_lake', name: '六排湖村', type: 'land', isSC: true, q: 1, r: 3 },
   { id: 'nor_cap', name: '中央海峡南段', type: 'sea', isSC: false, q: 2, r: 3 },
   { id: 'vel_cap', name: '三排大营', type: 'land', isSC: true, q: 3, r: 3 },

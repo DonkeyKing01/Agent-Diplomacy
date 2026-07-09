@@ -380,6 +380,14 @@ def _record_annual_advice_update(governance: Dict[str, Any], nation_id: str, yea
     governance["annual_advice_updated_years"] = sorted(aggregate_years)
 
 
+def _missing_annual_advice_nations(governance: Dict[str, Any], active_nations: List[str], year: int) -> List[str]:
+    return [
+        nation_id
+        for nation_id in active_nations
+        if int(year) not in set(_annual_advice_years_for_nation(governance, nation_id))
+    ]
+
+
 def _require_non_empty_profile_text(label: str, value: str) -> str:
     text = (value or "").strip()
     if not text:

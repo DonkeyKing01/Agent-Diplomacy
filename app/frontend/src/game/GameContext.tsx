@@ -27,6 +27,14 @@ export type SettingsSource = 'map' | 'control' | 'messages' | 'history' | 'index
 
 const NATION_META: Record<string, Nation> = Object.fromEntries(NATIONS.map((nation) => [nation.id, nation]));
 
+function normalizeUnitType(location: string, type: Unit['type']): Unit['type'] {
+  const provinceType = PROVINCE_MAP[location]?.type;
+  if (type === 'Fleet' && provinceType !== 'coast' && provinceType !== 'sea') {
+    return 'Army';
+  }
+  return type;
+}
+
 function mapBackendToGameState(backendState: BackendState): GameState {
   const ownership: Record<string, string | null> = {};
   Object.entries(backendState.ownership || {}).forEach(([provinceId, owner]) => {
@@ -42,7 +50,7 @@ function mapBackendToGameState(backendState: BackendState): GameState {
   const units: Unit[] = (backendState.units || []).map((unit, index) => ({
     id: `u${index}`,
     owner: unit.owner,
-    type: unit.type,
+    type: normalizeUnitType(unit.location, unit.type),
     location: unit.location,
   }));
 
@@ -89,7 +97,7 @@ function mapBackendToGameState(backendState: BackendState): GameState {
       units: (snapshot.units || []).map((unit, index) => ({
         id: `hs-${snapshot.report_id ?? snapshot.phase_index}-${index}`,
         owner: unit.owner,
-        type: unit.type,
+        type: normalizeUnitType(unit.location, unit.type),
         location: unit.location,
       })),
       scCount: snapshot.scCount || {},
