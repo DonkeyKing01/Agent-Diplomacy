@@ -527,12 +527,20 @@ def adjudicate(
 
     conflicts: List[Dict[str, Any]] = []
     winners_at: Dict[str, str] = {}
+    winning_move_from: Dict[str, str] = {}
     moved_from: set = set()
     standoff_provinces: set = set()
     dislodged_units: List[Dict[str, Any]] = []
 
     for dest, movers in move_intents.items():
-        contenders = list(movers)
+        effective_movers_by_nation: Dict[str, Dict[str, Any]] = {}
+        for mover in movers:
+            current = effective_movers_by_nation.get(mover["nation"])
+            if current is None or mover["strength"] > current["strength"]:
+                effective_movers_by_nation[mover["nation"]] = mover
+
+        effective_movers = list(effective_movers_by_nation.values())
+        contenders = list(effective_movers)
         defender = holding.get(dest)
         defender_unit = unit_at.get(dest)
         if defender:
@@ -554,7 +562,7 @@ def adjudicate(
                     "kind": "争夺",
                     "winner": "",
                     "participants": participants,
-                    "losers": [nation_name(mover["nation"]) for mover in movers],
+                    "losers": [nation_name(mover["nation"]) for mover in effective_movers],
                 }
             )
             continue
@@ -568,7 +576,7 @@ def adjudicate(
                     "kind": "争夺",
                     "winner": "",
                     "participants": participants,
-                    "losers": [nation_name(mover["nation"]) for mover in movers],
+                    "losers": [nation_name(mover["nation"]) for mover in effective_movers],
                 }
             )
             continue
@@ -580,12 +588,13 @@ def adjudicate(
                     "kind": "防守",
                     "winner": nation_name(winner["nation"]),
                     "participants": participants,
-                    "losers": [nation_name(mover["nation"]) for mover in movers],
+                    "losers": [nation_name(mover["nation"]) for mover in effective_movers],
                 }
             )
             continue
 
         winners_at[dest] = winner["nation"]
+        winning_move_from[dest] = winner["from"]
         moved_from.add(winner["from"])
         losers = [nation_name(contender["nation"]) for contender in contenders if contender is not winner]
         if defender and defender_unit and defender_unit["owner"] != winner["nation"]:
@@ -611,7 +620,7 @@ def adjudicate(
     new_units: List[Dict[str, str]] = []
     occupied: set = set()
     for dest, nation_id in winners_at.items():
-        origin = next((mover["from"] for mover in move_intents[dest] if mover["nation"] == nation_id), None)
+        origin = winning_move_from.get(dest)
         unit_type = unit_at.get(origin, {}).get("type", "Army") if origin else "Army"
         new_units.append({"owner": nation_id, "type": unit_type, "location": dest})
         occupied.add(dest)

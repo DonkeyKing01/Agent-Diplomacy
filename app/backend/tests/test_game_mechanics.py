@@ -199,6 +199,36 @@ def test_support_is_cut_when_supporter_is_attacked_from_elsewhere():
     assert defense_conflict["kind"] == "\u9632\u5b88"
     assert set(defense_conflict.get("participants", [])) == {"\u4e00\u6392\u9886\u5730", "\u4e5d\u6392\u9886\u5730"}
 
+
+def test_same_nation_duplicate_attacks_do_not_self_bounce():
+    provinces = {
+        "aur_cap": "aur",
+        "dra_watch": "aur",
+        "dra_peak": "dra",
+    }
+    units = [
+        {"owner": "aur", "type": "Army", "location": "aur_cap"},
+        {"owner": "aur", "type": "Army", "location": "dra_watch"},
+    ]
+    orders = {
+        "aur": [
+            {"unit_province": "aur_cap", "action": "Move", "target": "dra_peak", "support_of": ""},
+            {"unit_province": "dra_watch", "action": "Move", "target": "dra_peak", "support_of": ""},
+        ],
+    }
+
+    new_provinces, new_units, pending_conflicts, pending_retreats = adjudicate(
+        provinces, units, orders, rng=__import__("random").Random(1)
+    )
+
+    assert new_provinces["dra_peak"] == "aur"
+    assert sum(1 for unit in new_units if unit["owner"] == "aur" and unit["location"] == "dra_peak") == 1
+    assert pending_retreats == []
+    conflict = next(conflict for conflict in pending_conflicts if conflict["province"] == "dra_peak")
+    assert conflict["kind"] == "\u5360\u9886\u53d8\u5316"
+    assert conflict["winner"] == "\u4e00\u6392\u9886\u5730"
+
+
 def test_convoy_chain_allows_army_to_cross_multiple_sea_zones():
     provinces = {
         "lighthouse_isle": "vel",
